@@ -21,9 +21,13 @@ __all__ = (
     "SpatialAttention",
     "CBAM",
     "Concat",
+    "HSFPN",
     "RepConv",
     "Index",
 )
+from torch.nn import Upsample
+from torch.utils._contextlib import F
+
 
 class HSFPN(nn.Module):
     def __init__(self, in_planes, ratio = 4, flag=True):
