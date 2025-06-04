@@ -62,6 +62,7 @@ from .block import (
 )
 from .conv import (
     CBAM,
+    HSFPN,
     ChannelAttention,
     Concat,
     Conv,
@@ -104,6 +105,7 @@ from .transformer import (
 
 __all__ = (
     "Conv",
+    "HSFPN",
     "Conv2",
     "LightConv",
     "RepConv",
