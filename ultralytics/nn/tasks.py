@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-
+from ultralytics.nn.modules.conv import HSFPN
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
@@ -91,6 +91,10 @@ from ultralytics.utils.torch_utils import (
     smart_inference_mode,
     time_sync,
 )
+try:
+    import thop
+except ImportError:
+    thop = None
 
 
 class BaseModel(torch.nn.Module):
@@ -1609,6 +1613,7 @@ def parse_model(d, ch, verbose=True):
     base_modules = frozenset(
         {
             Classify,
+            HSFPN,
             Conv,
             ConvTranspose,
             GhostConv,
