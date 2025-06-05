@@ -1704,6 +1704,10 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
+
+        elif m in simam:
+            c2 = ch[f]
+            args = [c2, *args]
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
