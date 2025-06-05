@@ -10,7 +10,6 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from ultralytics.nn.modules.conv import simam
-from ultralytics.nn.modules.block import C2fs
 
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
@@ -32,7 +31,6 @@ from ultralytics.nn.modules import (
     Bottleneck,
     BottleneckCSP,
     C2f,
-    C2fs,
     C2fAttn,
     C2fCIB,
     C2fPSA,
@@ -1631,7 +1629,6 @@ def parse_model(d, ch, verbose=True):
             C1,
             C2,
             C2f,
-            C2fs,
             C3k2,
             RepNCSPELAN4,
             ELAN1,
@@ -1659,7 +1656,6 @@ def parse_model(d, ch, verbose=True):
             C2,
             C2f,
             C3k2,
-            C2fs,
             C2fAttn,
             C3,
             C3TR,
