@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
-from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad, simam
+from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -22,7 +22,6 @@ __all__ = (
     "C2",
     "C3",
     "C2f",
-    "C2fs",
     "C2fAttn",
     "ImagePoolingAttn",
     "ContrastiveHead",
