@@ -63,6 +63,7 @@ from .block import (
 from .conv import (
     CBAM,
     HSFPN,
+    simam,
     ChannelAttention,
     Concat,
     Conv,
