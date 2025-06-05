@@ -10,6 +10,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from ultralytics.nn.modules.conv import simam
+from ultralytics.nn.modules.blocks import C2fs
+
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
@@ -30,6 +32,7 @@ from ultralytics.nn.modules import (
     Bottleneck,
     BottleneckCSP,
     C2f,
+    C2fs,
     C2fAttn,
     C2fCIB,
     C2fPSA,
@@ -1613,7 +1616,6 @@ def parse_model(d, ch, verbose=True):
     base_modules = frozenset(
         {
             Classify,
-            simam,
             Conv,
             ConvTranspose,
             GhostConv,
@@ -1629,6 +1631,7 @@ def parse_model(d, ch, verbose=True):
             C1,
             C2,
             C2f,
+            C2fs,
             C3k2,
             RepNCSPELAN4,
             ELAN1,
@@ -1656,6 +1659,7 @@ def parse_model(d, ch, verbose=True):
             C2,
             C2f,
             C3k2,
+            C2fs,
             C2fAttn,
             C3,
             C3TR,
@@ -1705,9 +1709,7 @@ def parse_model(d, ch, verbose=True):
             if m is C2fCIB:
                 legacy = False
 
-        elif m in simam:
-            c2 = ch[f]
-            args = [c2, *args]
+        
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
@@ -1721,8 +1723,6 @@ def parse_model(d, ch, verbose=True):
         elif m is torch.nn.BatchNorm2d:
             args = [ch[f]]
         elif m is Concat:
-            c2 = sum(ch[x] for x in f)
-        elif m is HSFPN:
             c2 = sum(ch[x] for x in f)
         elif m in frozenset(
             {Detect, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect}
