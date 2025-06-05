@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from ultralytics.nn.modules.conv import simam
-from ultralytics.nn.modules.blocks import C2fs
+from ultralytics.nn.modules.block import C2fs
 
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
