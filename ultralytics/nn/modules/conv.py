@@ -36,14 +36,14 @@ import torch.nn as nn
 import torch
 import torch.nn as nn
 
+import torch
+import torch.nn as nn
+
 class simam(nn.Module):
-    def __init__(self, c1=None, c2=None, args, e_lambda=1e-4):
+    def __init__(self, c1, c2, k=3, s=1, e_lambda=1e-4):
         super(simam, self).__init__()
         self.activation = nn.Sigmoid()
         self.e_lambda = e_lambda
-
-    def __repr__(self):
-        return f"{self.__class__.__name__}(lambda={self.e_lambda})"
 
     def forward(self, x):
         b, c, h, w = x.size()
@@ -51,6 +51,7 @@ class simam(nn.Module):
         x_minus_mu_square = (x - x.mean(dim=[2, 3], keepdim=True)).pow(2)
         y = x_minus_mu_square / (4 * (x_minus_mu_square.sum(dim=[2, 3], keepdim=True) / n + self.e_lambda)) + 0.5
         return x * self.activation(y)
+
 
 
 
