@@ -133,6 +133,7 @@ __all__ = (
     "C2",
     "C3",
     "C2f",
+    "C2fs",
     "C3k2",
     "SCDown",
     "C2fPSA",
