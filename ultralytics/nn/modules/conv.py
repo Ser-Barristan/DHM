@@ -33,9 +33,9 @@ from torch.utils._contextlib import F
 import torch
 import torch.nn as nn
 
-class simam_module(nn.Module):
+class simam(nn.Module):
     def __init__(self, c1=None, c2=None, *args, e_lambda=1e-4):  # Accept c1, c2, and *args to avoid errors
-        super(simam_module, self).__init__()
+        super(simam, self).__init__()
         self.activation = nn.Sigmoid()
         self.e_lambda = e_lambda
 
