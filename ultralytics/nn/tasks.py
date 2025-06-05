@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from ultralytics.nn.modules.conv import HSFPN
+from ultralytics.nn.modules.conv import simam
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
@@ -1613,7 +1613,7 @@ def parse_model(d, ch, verbose=True):
     base_modules = frozenset(
         {
             Classify,
-            HSFPN,
+            simam,
             Conv,
             ConvTranspose,
             GhostConv,
@@ -1665,6 +1665,7 @@ def parse_model(d, ch, verbose=True):
             C2fPSA,
             C2fCIB,
             C2PSA,
+            simam,
             A2C2f,
         }
     )
