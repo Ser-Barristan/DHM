@@ -10,10 +10,11 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from ultralytics.nn.modules.conv import simam
-
+from ultralytics.nn.modules.TF import Swintransformer
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
+    SwinTransformer,
     C1,
     C2,
     C2PSA,
@@ -1614,6 +1615,7 @@ def parse_model(d, ch, verbose=True):
     base_modules = frozenset(
         {
             Classify,
+            SwinTransformer,
             Conv,
             ConvTranspose,
             GhostConv,
@@ -1652,6 +1654,7 @@ def parse_model(d, ch, verbose=True):
     repeat_modules = frozenset(  # modules with 'repeat' arguments
         {
             BottleneckCSP,
+            SwinTransformer,
             C1,
             C2,
             C2f,
