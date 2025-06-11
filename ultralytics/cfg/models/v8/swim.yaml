@@ -39,18 +39,18 @@ backbone:
 head:
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
   - [[-1, 9], 1, Concat, [1]] # cat backbone P4
-  - [-1, 1, SwinTransfomer, [512]] # 17
+  - [-1, 1, SwinTransformer, [512]] # 17
 
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
   - [[-1, 6], 1, Concat, [1]] # cat backbone P3
-  - [-1, 1, SwinTransfomer, [256]] # 20 (P3/8-small)
+  - [-1, 1, SwinTransformer, [256]] # 20 (P3/8-small)
 
   - [-1, 1, Conv, [256, 3, 2]]
   - [[-1, 17], 1, Concat, [1]] # cat head P4
-  - [-1, 1, SwinTransfomer, [512]] # 23 (P4/16-medium)
+  - [-1, 1, SwinTransformer, [512]] # 23 (P4/16-medium)
 
   - [-1, 1, Conv, [512, 3, 2]]
   - [[-1, 14], 1, Concat, [1]] # cat head P5
-  - [-1, 1, SwinTransfomer, [1024]] # 26 (P5/32-large)
+  - [-1, 1, SwinTransformer, [1024]] # 26 (P5/32-large)
 
   - [[17, 20, 23, 26], 1, Detect, [nc]] # Detect(P3, P4, P5)
