@@ -2,7 +2,7 @@ import math
 
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 #from ultralytics.yolo.utils.tal import dist2bbox, make_anchors
 from .conv import Conv
 
