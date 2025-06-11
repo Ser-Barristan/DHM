@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from ultralytics.nn.modules.conv import simam
-from ultralytics.nn.modules.TF import Swintransformer
+from ultralytics.nn.modules.TF import SwinTransformer
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
