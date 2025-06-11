@@ -53,4 +53,4 @@ head:
   - [[-1, 14], 1, Concat, [1]] # cat head P5
   - [-1, 1, SwinTransformer, [1024]] # 26 (P5/32-large)
 
-  - [[17, 20, 23, 26], 1, Detect, [nc]] # Detect(P3, P4, P5)
+  - [[20, 23, 26], 1, Detect, [nc]] # Detect(P3, P4, P5)
