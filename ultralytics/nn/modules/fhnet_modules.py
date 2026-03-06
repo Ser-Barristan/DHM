@@ -10,33 +10,40 @@ from ultralytics.nn.modules.conv import DWConv
 # ------------------------------------------------
 
 
+
 import torch
 import torch.nn as nn
 from ultralytics.nn.modules.conv import DWConv
 
-
 class DSC2f(nn.Module):
 
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+    def __init__(self, c1, c2, *args, **kwargs):
         super().__init__()
 
-        c_ = int(c2 * e)  # hidden channels
+        # default number of internal layers
+        n = 1
+        if len(args) > 0:
+            try:
+                n = int(args[0])
+            except:
+                n = 1
 
-        self.cv1 = DWConv(c1, 2 * c_, 1, 1)
-        self.cv2 = DWConv((2 + n) * c_, c2, 1, 1)
+        self.cv1 = DWConv(c1, c2, 3, 1)
 
         self.m = nn.ModuleList(
-            DWConv(c_, c_, 3, 1) for _ in range(n)
+            DWConv(c2, c2, 3, 1) for _ in range(n)
         )
+
+        self.cv2 = DWConv(c2*(n+1), c2, 1, 1)
 
     def forward(self, x):
 
-        y = list(self.cv1(x).chunk(2, 1))
+        y = [self.cv1(x)]
 
         for m in self.m:
             y.append(m(y[-1]))
 
-        return self.cv2(torch.cat(y, 1))
+        return self.cv2(torch.cat(y,1))
 # ------------------------------------------------
 # SimAM attention (parameter-free)
 # ------------------------------------------------
