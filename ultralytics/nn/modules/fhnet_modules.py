@@ -75,20 +75,27 @@ class SimAM(nn.Module):
 # Fringe Feature Block (for holographic fringes)
 # ------------------------------------------------
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
 class FringeBlock(nn.Module):
 
-    def __init__(self, c):
+    def __init__(self, c1=None, c2=None):
         super().__init__()
 
-        laplace = torch.tensor(
-            [[0,1,0],
-             [1,-4,1],
-             [0,1,0]], dtype=torch.float32
-        )
+        c = c2 if c2 is not None else c1
+
+        lap = torch.tensor([
+            [0,1,0],
+            [1,-4,1],
+            [0,1,0]
+        ], dtype=torch.float32)
 
         self.register_buffer(
             "lap",
-            laplace.view(1,1,3,3).repeat(c,1,1,1)
+            lap.view(1,1,3,3).repeat(c,1,1,1)
         )
 
         self.conv = nn.Conv2d(c*2, c, 1)
@@ -97,6 +104,6 @@ class FringeBlock(nn.Module):
 
         edge = F.conv2d(x, self.lap, padding=1, groups=x.shape[1])
 
-        out = torch.cat([x, edge],1)
+        out = torch.cat([x, edge], 1)
 
         return self.conv(out)
