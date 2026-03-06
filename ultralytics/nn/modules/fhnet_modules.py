@@ -14,9 +14,14 @@ import torch.nn as nn
 from ultralytics.nn.modules.conv import DWConv
 
 
+import torch
+import torch.nn as nn
+from ultralytics.nn.modules.conv import DWConv
+
+
 class DSC2f(nn.Module):
 
-    def __init__(self, c1, c2, n=1, shortcut=False):
+    def __init__(self, c1, c2, n=1, shortcut=False, *args):
         super().__init__()
 
         self.cv1 = DWConv(c1, c2, 3, 1)
