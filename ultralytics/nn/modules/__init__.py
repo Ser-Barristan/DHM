@@ -17,7 +17,7 @@ Examples:
     >>> os.system(f"onnxslim {f} {f} && open {f}")  # pip install onnxslim
 """
 from .TF import SwinTransformer
-
+from .fhnet_modules import DSC2f, SimAM, FringeBlock
 from .block import (
     C1,
     C2,
