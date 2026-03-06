@@ -48,9 +48,12 @@ class DSC2f(nn.Module):
 # SimAM attention (parameter-free)
 # ------------------------------------------------
 
+import torch
+import torch.nn as nn
+
 class SimAM(nn.Module):
 
-    def __init__(self, e_lambda=1e-4):
+    def __init__(self, c1=None, c2=None, e_lambda=1e-4):
         super().__init__()
         self.e_lambda = e_lambda
 
@@ -58,16 +61,15 @@ class SimAM(nn.Module):
 
         b, c, h, w = x.size()
 
-        n = w*h - 1
+        n = w * h - 1
 
-        x_mu = x.mean(dim=[2,3], keepdim=True)
+        x_minus_mu = x - x.mean(dim=[2,3], keepdim=True)
 
-        var = ((x-x_mu)**2).sum(dim=[2,3], keepdim=True) / n
+        var = (x_minus_mu ** 2).sum(dim=[2,3], keepdim=True) / n
 
-        y = (x-x_mu) / torch.sqrt(var + self.e_lambda)
+        y = x_minus_mu / torch.sqrt(var + self.e_lambda)
 
         return x * torch.sigmoid(y)
-
 
 # ------------------------------------------------
 # Fringe Feature Block (for holographic fringes)
