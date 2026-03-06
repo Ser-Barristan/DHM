@@ -9,18 +9,20 @@ from ultralytics.nn.modules.conv import DWConv
 # Lightweight C2f using existing DWConv
 # ------------------------------------------------
 
+import torch
+import torch.nn as nn
+from ultralytics.nn.modules.conv import DWConv
+
+
 class DSC2f(nn.Module):
 
-    def __init__(self, c1, c2, n=1):
+    def __init__(self, c1, c2, n=1, shortcut=False):
         super().__init__()
 
         self.cv1 = DWConv(c1, c2, 3, 1)
-
-        self.m = nn.ModuleList(
-            [DWConv(c2, c2, 3, 1) for _ in range(n)]
-        )
-
-        self.cv2 = DWConv(c2*(n+1), c2, 1, 1)
+        self.m = nn.ModuleList([DWConv(c2, c2, 3, 1) for _ in range(n)])
+        self.cv2 = DWConv(c2 * (n + 1), c2, 1, 1)
+        self.add = shortcut
 
     def forward(self, x):
 
@@ -29,8 +31,12 @@ class DSC2f(nn.Module):
         for m in self.m:
             y.append(m(y[-1]))
 
-        return self.cv2(torch.cat(y,1))
+        out = self.cv2(torch.cat(y, 1))
 
+        if self.add:
+            out = out + x
+
+        return out
 
 # ------------------------------------------------
 # SimAM attention (parameter-free)
