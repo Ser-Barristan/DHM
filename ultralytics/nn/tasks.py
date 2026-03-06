@@ -14,6 +14,9 @@ from ultralytics.nn.modules.TF import SwinTransformer
 globals()['SwinTransformer'] = SwinTransformer
 globals()['simam'] = simam
 from ultralytics.nn.modules.fhnet_modules import DSC2f, SimAM, FringeBlock
+globals()['DSC2f'] = DSC2f
+globals()['SimAM'] = SimAM
+globals()['FringeBlock'] = FringeBlock
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
