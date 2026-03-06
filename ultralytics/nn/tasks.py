@@ -1655,6 +1655,9 @@ def parse_model(d, ch, verbose=True):
             SCDown,
             C2fCIB,
             A2C2f,
+            DSC2f,
+            SimAM,
+            FringeBlock,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1666,6 +1669,7 @@ def parse_model(d, ch, verbose=True):
             C2f,
             C3k2,
             C2fAttn,
+            DSC2f,
             C3,
             C3TR,
             C3Ghost,
