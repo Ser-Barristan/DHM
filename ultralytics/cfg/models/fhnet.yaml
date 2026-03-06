@@ -2,6 +2,7 @@ nc: 3
 
 backbone:
 
+backbone:
   - [-1, 1, Conv, [16,3,2]]
   - [-1, 1, DSC2f, [32,1]]
   - [-1, 1, DSC2f, [64,1]]
