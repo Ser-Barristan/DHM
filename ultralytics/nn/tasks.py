@@ -21,6 +21,9 @@ from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
     SwinTransformer,
+    GaborStem,
+    HoloSPPF,
+    DeformC2f,
     C1,
     C2,
     C2PSA,
@@ -1667,6 +1670,7 @@ def parse_model(d, ch, verbose=True):
             C1,
             C2,
             C2f,
+            DeformC2f,
             C3k2,
             C2fAttn,
             C3,
@@ -1721,6 +1725,8 @@ def parse_model(d, ch, verbose=True):
         
         elif m is AIFI:
             args = [ch[f], *args]
+        elif m is HoloSPPF:
+            c2 = args[0]
         elif m in frozenset({HGStem, HGBlock}):
             c1, cm, c2 = ch[f], args[0], args[1]
             args = [c1, cm, c2, *args[2:]]
@@ -1747,6 +1753,9 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [c1, c2, *args[1:]]
+        elif m is GaborStem:
+        # args = [in_channels, out_channels]
+            c2 = args[1]   # out_channels
         elif m is CBFuse:
             c2 = ch[f[-1]]
         elif m in frozenset({TorchVision, Index}):
