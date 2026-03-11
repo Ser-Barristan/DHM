@@ -1,0 +1,91 @@
+# FILE: ultralytics/cfg/models/v8/holoYOLOv8n.yaml
+#
+# HoloYOLOv8n — Physics-informed YOLOv8 for Digital Holographic Microscopy
+# Target: >96% accuracy, <2.5M parameters
+#
+# Architecture changes vs YOLOv8n:
+#   1. GaborStem  — replaces first Conv(3,16,3,2) with Gabor filter bank
+#   2. HoloSPPF   — replaces SPPF with annular-pool + SPPF fusion
+#   3. DeformC2f  — replaces C2f in neck P3/P4 with deformable bottlenecks
+#
+# Param budget (approximate):
+#   Backbone  : ~0.9M  (reduced depth_multiple to compensate for new modules)
+#   Neck      : ~0.8M
+#   Head      : ~0.3M
+#   New modules: ~0.04M
+#   TOTAL     : ~2.1M  ✓ under 2.5M
+#
+# Input: grayscale hologram → set nc and channels carefully
+# For grayscale input set: ch: 1  (or keep 3 if loading RGB-converted holograms)
+
+# Model params
+nc: 80        # ← SET THIS to your actual class count
+ch: 1         # ← 1 for raw grayscale hologram, 3 if you convert to RGB
+
+scales:
+  # [depth_multiple, width_multiple, max_channels]
+  # Using custom 'holo' scale — shallower than 'n' to stay under 2.5M
+  holo: [0.33, 0.375, 1024]
+
+# ── Backbone ─────────────────────────────────────────────────────────────────
+backbone:
+  # [from, repeats, module, args]
+
+  # Layer 0 — CHANGED: GaborStem replaces Conv(ch, 16, 3, 2)
+  # GaborStem(in_channels, out_channels)
+  - [-1, 1, GaborStem, [1, 16]]          # out: (B, 16, H/2, W/2)
+
+  # Layer 1
+  - [-1, 1, Conv, [32, 3, 2]]            # out: (B, 32, H/4, W/4)
+
+  # Layer 2
+  - [-1, 1, C2f, [32, True]]
+
+  # Layer 3
+  - [-1, 1, Conv, [64, 3, 2]]            # out: (B, 64, H/8, W/8)
+
+  # Layer 4
+  - [-1, 2, C2f, [64, True]]
+
+  # Layer 5
+  - [-1, 1, Conv, [128, 3, 2]]           # out: (B, 128, H/16, W/16)
+
+  # Layer 6
+  - [-1, 2, C2f, [128, True]]
+
+  # Layer 7
+  - [-1, 1, Conv, [256, 3, 2]]           # out: (B, 256, H/32, W/32)
+
+  # Layer 8
+  - [-1, 1, C2f, [256, True]]
+
+  # Layer 9 — CHANGED: HoloSPPF replaces SPPF(256, 256, 5)
+  - [-1, 1, HoloSPPF, [256, 5]]
+
+
+# ── Neck (PAN-FPN) ────────────────────────────────────────────────────────────
+head:
+  # Upsample + P4 fusion
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]       # 10: upsample
+  - [[-1, 6], 1, Concat, [1]]                         # 11: cat backbone P4
+  # CHANGED: DeformC2f instead of C2f for ring-aware neck fusion
+  - [-1, 1, DeformC2f, [128, False]]                  # 12: P4/P3 neck
+
+  # Upsample + P3 fusion
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]       # 13: upsample
+  - [[-1, 4], 1, Concat, [1]]                         # 14: cat backbone P3
+  # CHANGED: DeformC2f for P3 neck
+  - [-1, 1, DeformC2f, [64, False]]                   # 15: P3 (small obj)
+
+  # Downsample + P4 fusion
+  - [-1, 1, Conv, [64, 3, 2]]                         # 16
+  - [[-1, 12], 1, Concat, [1]]                        # 17: cat P4
+  - [-1, 1, C2f, [128, False]]                        # 18: P4 (medium obj)
+
+  # Downsample + P5 fusion
+  - [-1, 1, Conv, [128, 3, 2]]                        # 19
+  - [[-1, 9], 1, Concat, [1]]                         # 20: cat P5
+  - [-1, 1, C2f, [256, False]]                        # 21: P5 (large obj)
+
+  # Detection head — reads from P3, P4, P5
+  - [[15, 18, 21], 1, Detect, [nc]]                   # 22: Detect
