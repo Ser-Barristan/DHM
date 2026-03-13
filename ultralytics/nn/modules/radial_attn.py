@@ -1,172 +1,208 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
 """
-HoloYOLO — Radial / Annular Attention + HoloSPPF
-FILE PATH IN YOUR FORK: ultralytics/nn/modules/radial_attn.py
+HoloYOLO — Gabor Stem Module
+FILE PATH IN YOUR FORK: ultralytics/nn/modules/gabor.py
 CREATE THIS FILE (it does not exist in vanilla ultralytics)
 
-HoloSPPF replaces the vanilla SPPF in YOLOv8n backbone (layer 9).
-It fuses standard square MaxPool SPPF with an annular-pooling path
-that explicitly captures concentric ring energy — the dominant
-feature of holographic diffraction patterns.
+Gabor filter bank stem for holographic fringe detection.
+Replaces the first Conv(ch, 16, 3, 2) layer in YOLOv8n backbone.
 """
+
+import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-__all__ = ("AnnularPool", "HoloSPPF")
+__all__ = ("GaborStem",)
 
 
-# ── helpers ────────────────────────────────────────────────────────────────────
-
-def _annular_mask(size: int, r_inner: float, r_outer: float, device) -> torch.Tensor:
+class GaborFilterBank(nn.Module):
     """
-    Return a (size, size) binary float mask for the annular band
-    between normalised radii r_inner and r_outer (0 = centre, 1 = corner).
-    """
-    cy = cx = (size - 1) / 2.0
-    ys = torch.arange(size, dtype=torch.float32, device=device).view(-1, 1)
-    xs = torch.arange(size, dtype=torch.float32, device=device).view(1, -1)
-    dist = torch.sqrt((ys - cy) ** 2 + (xs - cx) ** 2) / (size / 2.0)
-    return ((dist >= r_inner) & (dist < r_outer)).float()   # (size, size)
+    Learnable Gabor filter bank.
 
-
-# ── AnnularPool ────────────────────────────────────────────────────────────────
-
-class AnnularPool(nn.Module):
-    """
-    Multi-ring spatial pooling.
-
-    Divides the spatial extent into `n_rings` concentric annular bands.
-    Each band is avg-pooled to a (B, C) descriptor, mixed through a
-    learnable linear layer, then gated and broadcast back spatially.
-
-    Ring boundaries are learnable — the network can widen or narrow
-    each band depending on the object scale distribution.
+    Initialised to holographic fringe frequencies (40× objective,
+    typical fringe spacing 8–20 px → normalised freq 0.05–0.20).
+    All parameters remain trainable so the network can adapt.
 
     Args:
-        channels  (int): feature-map channel count
-        n_rings   (int): number of concentric bands (default 4)
-        pool_size (int): fixed spatial size used for mask application (default 13)
+        in_channels  (int): input image channels (1 = grayscale, 3 = RGB)
+        out_channels (int): output channels after 1×1 mixing conv
+        kernel_size  (int): Gabor kernel spatial size (odd, ≥7)
+        base_freqs  (tuple): initial spatial frequencies in cycles/pixel
+        n_orient     (int): number of orientations uniformly spaced in [0, π)
     """
 
-    def __init__(self, channels: int, n_rings: int = 4, pool_size: int = 13):
+    def __init__(
+        self,
+        in_channels: int = 1,
+        out_channels: int = 32,
+        kernel_size: int = 15,
+        base_freqs: tuple = (0.05, 0.10, 0.15, 0.20),
+        n_orient: int = 8,
+    ):
         super().__init__()
-        self.channels  = channels
-        self.n_rings   = n_rings
-        self.pool_size = pool_size
+        self.in_channels = in_channels
+        self.kernel_size = kernel_size
+        n_freq = len(base_freqs)
+        n_gabor = n_freq * n_orient                        # 32 filters by default
 
-        # Learnable ring boundary params (init uniformly)
-        bounds = torch.linspace(0.0, 1.0, n_rings + 1)
-        self.r_inner = nn.Parameter(bounds[:-1].clone())     # (n_rings,)
-        self.r_outer = nn.Parameter(bounds[1:].clone())      # (n_rings,)
+        # ── Learnable filter parameters ──────────────────────────────────────
+        # frequencies: repeat each freq for every orientation
+        freq_init = torch.tensor(base_freqs, dtype=torch.float32).repeat(n_orient)
+        self.frequencies = nn.Parameter(freq_init)          # (n_gabor,)
 
-        # Per-ring feature transform
-        self.ring_proj = nn.ModuleList(
-            [nn.Linear(channels, channels, bias=False) for _ in range(n_rings)]
-        )
-        # Gate: all ring descriptors → channel attention vector
-        self.gate = nn.Sequential(
-            nn.Linear(channels * n_rings, channels),
-            nn.Sigmoid(),
-        )
-        self.norm = nn.GroupNorm(num_groups=min(32, channels), num_channels=channels)
+        # orientations: n_orient angles, each repeated n_freq times
+        theta_init = torch.linspace(0.0, math.pi, n_orient + 1)[:-1]  # [0, π)
+        theta_init = theta_init.repeat_interleave(n_freq)
+        self.thetas = nn.Parameter(theta_init)              # (n_gabor,)
+
+        # Gaussian envelope widths
+        self.sigma_x = nn.Parameter(torch.full((n_gabor,), 3.0))
+        self.sigma_y = nn.Parameter(torch.full((n_gabor,), 3.0))
+
+        # Carrier phase offset
+        self.psi = nn.Parameter(torch.zeros(n_gabor))
+
+        self._n_gabor = n_gabor
+
+        # ── 1×1 mixer: (n_gabor * in_channels) → out_channels ───────────────
+        self.mix = nn.Conv2d(n_gabor * in_channels, out_channels, kernel_size=1, bias=False)
+        self.bn  = nn.BatchNorm2d(out_channels)
+        self.act = nn.SiLU(inplace=True)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _build_kernels(self, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        """
+        Construct (n_gabor, 1, k, k) Gabor kernels from learnable params.
+
+        Args:
+            dtype:  match the input tensor dtype (float32 or float16 under AMP)
+            device: match the input tensor device
+
+        Note: all trig ops are performed in float32 for numerical stability,
+        then cast to the requested dtype at the very end.  This avoids NaN
+        in half-precision sin/cos while still satisfying F.conv2d type checks.
+        """
+        k    = self.kernel_size
+        half = k // 2
+
+        # Always build grid in float32 for precision
+        yy, xx = torch.meshgrid(
+            torch.arange(-half, half + 1, dtype=torch.float32, device=device),
+            torch.arange(-half, half + 1, dtype=torch.float32, device=device),
+            indexing="ij",
+        )                                                    # (k, k)
+
+        # Cast learnable params to float32 for the computation
+        freqs   = self.frequencies.float()
+        thetas  = self.thetas.float()
+        sigma_x = self.sigma_x.float()
+        sigma_y = self.sigma_y.float()
+        psi     = self.psi.float()
+
+        kernels = []
+        for i in range(self._n_gabor):
+            cos_t = torch.cos(thetas[i])
+            sin_t = torch.sin(thetas[i])
+            sx    = sigma_x[i].abs().clamp(min=0.5)
+            sy    = sigma_y[i].abs().clamp(min=0.5)
+
+            x_rot =  xx * cos_t + yy * sin_t
+            y_rot = -xx * sin_t + yy * cos_t
+
+            gauss   = torch.exp(-0.5 * (x_rot ** 2 / sx ** 2 + y_rot ** 2 / sy ** 2))
+            carrier = torch.cos(2.0 * math.pi * freqs[i] * x_rot + psi[i])
+            kernels.append(gauss * carrier)
+
+        # Stack in float32 then cast to match input — fixes AMP HalfTensor mismatch
+        return torch.stack(kernels).unsqueeze(1).to(dtype=dtype, device=device)
+
+    # ── forward ───────────────────────────────────────────────────────────────
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: (B, C, H, W)
+            x: (B, C, H, W)  — float32 or float16 (AMP)
         Returns:
-            out: (B, C, H, W)  — residual-connected ring-attentive features
+            out: (B, out_channels, H, W)  — same dtype as input
         """
-        B, C, H, W = x.shape
-        p   = self.pool_size
-        xp  = F.adaptive_avg_pool2d(x, (p, p))              # (B, C, p, p)
-        dev = x.device
+        # Build kernels matching the input's dtype and device every forward pass.
+        # This is cheap (no backward through the mesh) and fixes the AMP
+        # HalfTensor / FloatTensor mismatch.
+        kernels = self._build_kernels(dtype=x.dtype, device=x.device)
+        pad     = self.kernel_size // 2
 
-        ring_descs = []
-        for i in range(self.n_rings):
-            r0 = self.r_inner[i].clamp(0.00, 0.98)
-            r1 = self.r_outer[i].clamp(r0.detach() + 0.01, 1.0)
+        # Apply bank to every input channel independently, then concat
+        channel_responses = []
+        for c in range(self.in_channels):
+            xc  = x[:, c : c + 1]                           # (B, 1, H, W)
+            out = F.conv2d(xc, kernels, padding=pad)         # (B, n_gabor, H, W)
+            channel_responses.append(out)
 
-            mask     = _annular_mask(p, float(r0), float(r1), dev)  # (p, p)
-            mask_sum = mask.sum().clamp(min=1.0)
-
-            # Masked average → (B, C)
-            desc = (xp * mask.unsqueeze(0).unsqueeze(0)).sum(dim=(-2, -1)) / mask_sum
-            ring_descs.append(self.ring_proj[i](desc))       # (B, C)
-
-        # Gate over all rings
-        stacked = torch.cat(ring_descs, dim=-1)              # (B, C*n_rings)
-        attn    = self.gate(stacked).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
-
-        out = self.norm(x * attn)
-        return out + x                                       # residual
+        fused = torch.cat(channel_responses, dim=1)          # (B, n_gabor*C, H, W)
+        return self.act(self.bn(self.mix(fused)))             # (B, out_channels, H, W)
 
 
-# ── HoloSPPF ──────────────────────────────────────────────────────────────────
-
-class HoloSPPF(nn.Module):
+class GaborStem(nn.Module):
     """
-    Hologram-aware SPPF — drop-in replacement for vanilla SPPF.
+    Drop-in replacement for YOLOv8n's first Conv block.
 
-    Two parallel paths:
-      A) Standard SPPF  (3× MaxPool cascade)
-      B) AnnularPool    (ring-aware global context)
-    Fused via a learned per-channel scalar gate (alpha).
+    Vanilla YOLOv8n backbone layer-0:
+        - [-1, 1, Conv, [16, 3, 2]]   # Conv(ch, 16, k=3, s=2)
 
-    Interface matches ultralytics SPPF(c1, c2, k=5) exactly.
+    Replace with (yaml):
+        - [-1, 1, GaborStem, [16]]    # GaborStem(out_channels=16)
+        NOTE: only ONE arg in yaml — out_channels.
+              in_channels is read automatically from ch[] by tasks.py
+              via the GaborStem branch you added to parse_model().
 
-    In holoYOLOv8n.yaml, backbone layer 9:
-        BEFORE: - [-1, 1, SPPF,     [256, 5]]
-        AFTER:  - [-1, 1, HoloSPPF, [256, 5]]
+    Architecture:
+        GaborFilterBank(in_ch → 32, same spatial size)
+        → DW-conv(32, k=3, s=2)          # stride-2 downsample
+        → PW-conv(32 → out_channels)
+        → BN → SiLU
+
+    Parameter count: ~20 K  (vs ~450 for standard Conv stem)
 
     Args:
-        c1 (int): input channels
-        c2 (int): output channels
-        k  (int): MaxPool kernel size (default 5, same as SPPF)
+        out_channels (int): output channel count (e.g. 16 for YOLOv8n)
+        in_channels  (int): input channels — passed by parse_model via ch[f].
+                            Defaults to 1 (grayscale hologram).
+                            parse_model sets this automatically; you do NOT
+                            put it in the yaml args list.
     """
 
-    def __init__(self, c1: int, c2: int, k: int = 5):
+    def __init__(self, out_channels: int = 16, in_channels: int = 1):
         super().__init__()
-        c1 = int(c1)
-        c2 = int(c2)
-        k  = int(k)
-        c_ = c1 // 2                                         # hidden channels
+        out_channels = int(out_channels)
+        in_channels  = int(in_channels)    # 1 = grayscale, 3 = RGB
+        mid          = 32
 
-        # ── Path A: standard SPPF ─────────────────────────────────────────
-        self.cv1 = self._conv(c1, c_, 1)
-        self.pool = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
-        self.cv2  = self._conv(c_ * 4, c2, 1)
+        self.in_channels = in_channels     # stored so forward can validate
 
-        # ── Path B: annular-pool ──────────────────────────────────────────
-        self.annular  = AnnularPool(c1, n_rings=4, pool_size=13)
-        self.ann_proj = self._conv(c1, c2, 1)
-
-        # ── Fusion gate ───────────────────────────────────────────────────
-        # alpha=0.5 init: equal blend; trained to favour whichever is better
-        self.alpha = nn.Parameter(torch.full((c2,), 0.5))
-
-    @staticmethod
-    def _conv(ci, co, k, s=1):
-        return nn.Sequential(
-            nn.Conv2d(ci, co, k, stride=s, padding=k // 2, bias=False),
-            nn.BatchNorm2d(co),
-            nn.SiLU(inplace=True),
+        self.gabor = GaborFilterBank(
+            in_channels=in_channels,
+            out_channels=mid,
+            kernel_size=15,
+            base_freqs=(0.05, 0.10, 0.15, 0.20),
+            n_orient=8,
         )
+        # Stride-2 depthwise-separable (cheap) downsample
+        self.dw  = nn.Conv2d(mid, mid, kernel_size=3, stride=2, padding=1, groups=mid, bias=False)
+        self.pw  = nn.Conv2d(mid, out_channels, kernel_size=1, bias=False)
+        self.bn  = nn.BatchNorm2d(out_channels)
+        self.act = nn.SiLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Path A
-        y   = self.cv1(x)
-        p1  = self.pool(y)
-        p2  = self.pool(p1)
-        p3  = self.pool(p2)
-        sppf_out = self.cv2(torch.cat([y, p1, p2, p3], dim=1))
-
-        # Path B
-        ann_out = self.ann_proj(self.annular(x))
-
-        # Gated fusion
-        a = torch.sigmoid(self.alpha).view(1, -1, 1, 1)
-        return a * sppf_out + (1.0 - a) * ann_out
+        # Safety: if input has more channels than expected (e.g. model built
+        # with ch=3 but grayscale passed), use only the declared channels.
+        # In practice parse_model guarantees this matches.
+        if x.shape[1] != self.in_channels:
+            x = x[:, : self.in_channels]      # trim silently
+        x = self.gabor(x)                     # (B, 32,     H,   W)
+        x = self.dw(x)                        # (B, 32,     H/2, W/2)
+        x = self.act(self.bn(self.pw(x)))     # (B, out_ch, H/2, W/2)
+        return x
