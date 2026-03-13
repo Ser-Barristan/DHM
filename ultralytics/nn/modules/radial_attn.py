@@ -71,7 +71,7 @@ class AnnularPool(nn.Module):
             nn.Linear(channels * n_rings, channels),
             nn.Sigmoid(),
         )
-        self.norm = nn.GroupNorm(num_groups=min(32, channels), num_channels=channels)
+        self.norm = nn.BatchNorm2d(channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -102,9 +102,9 @@ class AnnularPool(nn.Module):
         stacked = torch.cat(ring_descs, dim=-1)              # (B, C*n_rings)
         attn    = self.gate(stacked).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
 
-        # GroupNorm requires float32 in some torch versions — upcast then restore
+
         y = x * attn
-        out = self.norm(y.float()).to(dtype=x.dtype)
+        out = self.norm(y)
         return out + x                                       # residual
 
 
