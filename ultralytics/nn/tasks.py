@@ -1632,6 +1632,7 @@ def parse_model(d, ch, verbose=True):
             GhostBottleneck,
             SPP,
             SPPF,
+            HoloSPPF,
             C2fPSA,
             C2PSA,
             DWConv,
