@@ -74,44 +74,65 @@ class GaborFilterBank(nn.Module):
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
-    def _build_kernels(self) -> torch.Tensor:
-        """Construct (n_gabor, 1, k, k) Gabor kernels from learnable params."""
+    def _build_kernels(self, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        """
+        Construct (n_gabor, 1, k, k) Gabor kernels from learnable params.
+
+        Args:
+            dtype:  match the input tensor dtype (float32 or float16 under AMP)
+            device: match the input tensor device
+
+        Note: all trig ops are performed in float32 for numerical stability,
+        then cast to the requested dtype at the very end.  This avoids NaN
+        in half-precision sin/cos while still satisfying F.conv2d type checks.
+        """
         k    = self.kernel_size
         half = k // 2
-        dev  = self.frequencies.device
 
+        # Always build grid in float32 for precision
         yy, xx = torch.meshgrid(
-            torch.arange(-half, half + 1, dtype=torch.float32, device=dev),
-            torch.arange(-half, half + 1, dtype=torch.float32, device=dev),
+            torch.arange(-half, half + 1, dtype=torch.float32, device=device),
+            torch.arange(-half, half + 1, dtype=torch.float32, device=device),
             indexing="ij",
         )                                                    # (k, k)
 
+        # Cast learnable params to float32 for the computation
+        freqs   = self.frequencies.float()
+        thetas  = self.thetas.float()
+        sigma_x = self.sigma_x.float()
+        sigma_y = self.sigma_y.float()
+        psi     = self.psi.float()
+
         kernels = []
         for i in range(self._n_gabor):
-            cos_t = torch.cos(self.thetas[i])
-            sin_t = torch.sin(self.thetas[i])
-            sx    = self.sigma_x[i].abs().clamp(min=0.5)
-            sy    = self.sigma_y[i].abs().clamp(min=0.5)
+            cos_t = torch.cos(thetas[i])
+            sin_t = torch.sin(thetas[i])
+            sx    = sigma_x[i].abs().clamp(min=0.5)
+            sy    = sigma_y[i].abs().clamp(min=0.5)
 
             x_rot =  xx * cos_t + yy * sin_t
             y_rot = -xx * sin_t + yy * cos_t
 
             gauss   = torch.exp(-0.5 * (x_rot ** 2 / sx ** 2 + y_rot ** 2 / sy ** 2))
-            carrier = torch.cos(2.0 * math.pi * self.frequencies[i] * x_rot + self.psi[i])
+            carrier = torch.cos(2.0 * math.pi * freqs[i] * x_rot + psi[i])
             kernels.append(gauss * carrier)
 
-        return torch.stack(kernels).unsqueeze(1)             # (n_gabor, 1, k, k)
+        # Stack in float32 then cast to match input — fixes AMP HalfTensor mismatch
+        return torch.stack(kernels).unsqueeze(1).to(dtype=dtype, device=device)
 
     # ── forward ───────────────────────────────────────────────────────────────
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: (B, C, H, W)
+            x: (B, C, H, W)  — float32 or float16 (AMP)
         Returns:
-            out: (B, out_channels, H, W)  — same spatial size (padding=k//2)
+            out: (B, out_channels, H, W)  — same dtype as input
         """
-        kernels = self._build_kernels()                      # (n_gabor, 1, k, k)
+        # Build kernels matching the input's dtype and device every forward pass.
+        # This is cheap (no backward through the mesh) and fixes the AMP
+        # HalfTensor / FloatTensor mismatch.
+        kernels = self._build_kernels(dtype=x.dtype, device=x.device)
         pad     = self.kernel_size // 2
 
         # Apply bank to every input channel independently, then concat
