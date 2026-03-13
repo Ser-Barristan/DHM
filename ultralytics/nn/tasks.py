@@ -1632,7 +1632,6 @@ def parse_model(d, ch, verbose=True):
             GhostBottleneck,
             SPP,
             SPPF,
-            HoloSPPF,
             C2fPSA,
             C2PSA,
             DWConv,
@@ -1641,6 +1640,7 @@ def parse_model(d, ch, verbose=True):
             C1,
             C2,
             C2f,
+            DeformC2f,
             C3k2,
             RepNCSPELAN4,
             ELAN1,
@@ -1726,8 +1726,12 @@ def parse_model(d, ch, verbose=True):
         
         elif m is AIFI:
             args = [ch[f], *args]
-        elif m is HoloSPPF:
-            c2 = args[0]
+        elif m is HoloSPPF: # HoloYOLO fix
+            c1 = ch[f]
+            c2 = int(args[0]) # out_channels
+            if c2 != nc:
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+                args = [c1, c2, *args[1:]] # (c1, c2, k=5)
         elif m in frozenset({HGStem, HGBlock}):
             c1, cm, c2 = ch[f], args[0], args[1]
             args = [c1, cm, c2, *args[2:]]
@@ -1754,9 +1758,9 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [c1, c2, *args[1:]]
-        elif m is GaborStem:
-        # args = [in_channels, out_channels]
-            c2 = args[1]   # out_channels
+        elif m is GaborStem: # HoloYOLO fix
+            c2 = int(args[0]) # out_channels (yaml arg [16])
+            args = [c2, ch[f]] # GaborStem(out_channels, in_channels)
         elif m is CBFuse:
             c2 = ch[f[-1]]
         elif m in frozenset({TorchVision, Index}):
