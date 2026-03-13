@@ -132,28 +132,36 @@ class GaborStem(nn.Module):
     Vanilla YOLOv8n backbone layer-0:
         - [-1, 1, Conv, [16, 3, 2]]   # Conv(ch, 16, k=3, s=2)
 
-    Replace with:
-        - [-1, 1, GaborStem, [16, 1]] # GaborStem(out_ch=16, in_ch=1)
-        NOTE: yaml args order is [out_channels, in_channels]
+    Replace with (yaml):
+        - [-1, 1, GaborStem, [16]]    # GaborStem(out_channels=16)
+        NOTE: only ONE arg in yaml — out_channels.
+              in_channels is read automatically from ch[] by tasks.py
+              via the GaborStem branch you added to parse_model().
 
     Architecture:
-        GaborFilterBank(in_ch → 32)
-        → DW-conv(32, k=3, s=2)       # stride-2 downsample
-        → PW-conv(32 → out_ch)
+        GaborFilterBank(in_ch → 32, same spatial size)
+        → DW-conv(32, k=3, s=2)          # stride-2 downsample
+        → PW-conv(32 → out_channels)
         → BN → SiLU
 
-    Parameter count: ~20 K  (vs ~450 for standard Conv stem — still tiny)
+    Parameter count: ~20 K  (vs ~450 for standard Conv stem)
 
     Args:
-        out_channels (int): number of output channels (matches vanilla layer-0 output)
-        in_channels  (int): 1 for raw grayscale hologram, 3 for RGB
+        out_channels (int): output channel count (e.g. 16 for YOLOv8n)
+        in_channels  (int): input channels — passed by parse_model via ch[f].
+                            Defaults to 1 (grayscale hologram).
+                            parse_model sets this automatically; you do NOT
+                            put it in the yaml args list.
     """
 
     def __init__(self, out_channels: int = 16, in_channels: int = 1):
         super().__init__()
-        out_channels = int(out_channels)   # yaml can deliver floats
-        in_channels  = int(in_channels)
-        mid = 32
+        out_channels = int(out_channels)
+        in_channels  = int(in_channels)    # 1 = grayscale, 3 = RGB
+        mid          = 32
+
+        self.in_channels = in_channels     # stored so forward can validate
+
         self.gabor = GaborFilterBank(
             in_channels=in_channels,
             out_channels=mid,
@@ -161,14 +169,19 @@ class GaborStem(nn.Module):
             base_freqs=(0.05, 0.10, 0.15, 0.20),
             n_orient=8,
         )
-        # Stride-2 depthwise-separable downsample (cheap)
+        # Stride-2 depthwise-separable (cheap) downsample
         self.dw  = nn.Conv2d(mid, mid, kernel_size=3, stride=2, padding=1, groups=mid, bias=False)
         self.pw  = nn.Conv2d(mid, out_channels, kernel_size=1, bias=False)
         self.bn  = nn.BatchNorm2d(out_channels)
         self.act = nn.SiLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.gabor(x)           # (B, 32,      H,   W)
-        x = self.dw(x)              # (B, 32,      H/2, W/2)
-        x = self.act(self.bn(self.pw(x)))   # (B, out_ch, H/2, W/2)
+        # Safety: if input has more channels than expected (e.g. model built
+        # with ch=3 but grayscale passed), use only the declared channels.
+        # In practice parse_model guarantees this matches.
+        if x.shape[1] != self.in_channels:
+            x = x[:, : self.in_channels]      # trim silently
+        x = self.gabor(x)                     # (B, 32,     H,   W)
+        x = self.dw(x)                        # (B, 32,     H/2, W/2)
+        x = self.act(self.bn(self.pw(x)))     # (B, out_ch, H/2, W/2)
         return x
