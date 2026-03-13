@@ -1,91 +1,137 @@
+# Ultralytics YOLO 🚀, AGPL-3.0 License
 # FILE: ultralytics/cfg/models/v8/holoYOLOv8n.yaml
 #
 # HoloYOLOv8n — Physics-informed YOLOv8 for Digital Holographic Microscopy
 # Target: >96% accuracy, <2.5M parameters
 #
-# Architecture changes vs YOLOv8n:
-#   1. GaborStem  — replaces first Conv(3,16,3,2) with Gabor filter bank
-#   2. HoloSPPF   — replaces SPPF with annular-pool + SPPF fusion
-#   3. DeformC2f  — replaces C2f in neck P3/P4 with deformable bottlenecks
+# ── Changes vs vanilla YOLOv8n ───────────────────────────────────────────────
+#   Layer  0  Conv(ch,16,3,2)  →  GaborStem([1, 16])
+#   Layer  9  SPPF(256,5)      →  HoloSPPF([256, 5])
+#   Layer 12  C2f(128,False)   →  DeformC2f([128, False])
+#   Layer 15  C2f(64, False)   →  DeformC2f([64,  False])
 #
-# Param budget (approximate):
-#   Backbone  : ~0.9M  (reduced depth_multiple to compensate for new modules)
-#   Neck      : ~0.8M
-#   Head      : ~0.3M
-#   New modules: ~0.04M
-#   TOTAL     : ~2.1M  ✓ under 2.5M
+# ── GaborStem args note ───────────────────────────────────────────────────────
+#   yaml args: [in_channels, out_channels]
+#   tasks.py GaborStem branch: c2 = args[1] = 16
+#   module called as: GaborStem(1, 16)  →  in_ch=1, out_ch=16  ✓
 #
-# Input: grayscale hologram → set nc and channels carefully
-# For grayscale input set: ch: 1  (or keep 3 if loading RGB-converted holograms)
+# ── Channel trace (width=0.375, depth=0.33) ──────────────────────────────────
+#   Layer  0  GaborStem          ch_out=16  (raw, no width scaling in GaborStem branch)
+#   Layer  1  Conv [32]          ch_out=16  (make_div(32×0.375,8)=16)
+#   Layer  2  C2f  [32]  n=1     ch_out=16
+#   Layer  3  Conv [64]          ch_out=24  (make_div(64×0.375,8)=24)
+#   Layer  4  C2f  [64]  n=1     ch_out=24
+#   Layer  5  Conv [128]         ch_out=48  (make_div(128×0.375,8)=48)
+#   Layer  6  C2f  [128] n=1     ch_out=48
+#   Layer  7  Conv [256]         ch_out=96  (make_div(256×0.375,8)=96)
+#   Layer  8  C2f  [256] n=1     ch_out=96
+#   Layer  9  HoloSPPF [256]     ch_out=96
+#   Layer 10  Upsample           ch_out=96
+#   Layer 11  Concat[-1,6]       ch_out=144 (96+48)
+#   Layer 12  DeformC2f [128]    ch_out=48
+#   Layer 13  Upsample           ch_out=48
+#   Layer 14  Concat[-1,4]       ch_out=72  (48+24)
+#   Layer 15  DeformC2f [64]     ch_out=24
+#   Layer 16  Conv [64]          ch_out=24
+#   Layer 17  Concat[-1,12]      ch_out=72  (24+48)
+#   Layer 18  C2f  [128]         ch_out=48
+#   Layer 19  Conv [128]         ch_out=48
+#   Layer 20  Concat[-1,9]       ch_out=144 (48+96)
+#   Layer 21  C2f  [256]         ch_out=96
+#   Layer 22  Detect             in_ch=[24, 48, 96]
+#
+# ── nc and ch ─────────────────────────────────────────────────────────────────
+#   ch: 1 = raw grayscale hologram  (change GaborStem args[0] to 3 if RGB)
 
-# Model params
-nc: 80        # ← SET THIS to your actual class count
-ch: 1         # ← 1 for raw grayscale hologram, 3 if you convert to RGB
+nc: 3   # SET to your actual class count
+ch: 1   # 1 = grayscale hologram
 
 scales:
   # [depth_multiple, width_multiple, max_channels]
-  # Using custom 'holo' scale — shallower than 'n' to stay under 2.5M
   holo: [0.33, 0.375, 1024]
 
-# ── Backbone ─────────────────────────────────────────────────────────────────
+# ── Backbone ──────────────────────────────────────────────────────────────────
 backbone:
   # [from, repeats, module, args]
 
-  # Layer 0 — CHANGED: GaborStem replaces Conv(ch, 16, 3, 2)
-  # GaborStem(in_channels, out_channels)
-  - [-1, 1, GaborStem, [1, 16]]          # out: (B, 16, H/2, W/2)
+  # Layer 0 — GaborStem: physics-informed Gabor filter bank stem
+  # args: [in_channels, out_channels]
+  # tasks.py GaborStem elif: c2 = args[1] = 16 → calls GaborStem(1, 16)
+  - [-1, 1, GaborStem, [1, 16]]          # ch_out=16,  H/2  × W/2
 
   # Layer 1
-  - [-1, 1, Conv, [32, 3, 2]]            # out: (B, 32, H/4, W/4)
+  - [-1, 1, Conv,      [32, 3, 2]]       # ch_out=16,  H/4  × W/4
 
   # Layer 2
-  - [-1, 1, C2f, [32, True]]
+  - [-1, 1, C2f,       [32, True]]       # ch_out=16,  H/4  × W/4
 
   # Layer 3
-  - [-1, 1, Conv, [64, 3, 2]]            # out: (B, 64, H/8, W/8)
+  - [-1, 1, Conv,      [64, 3, 2]]       # ch_out=24,  H/8  × W/8
 
-  # Layer 4
-  - [-1, 2, C2f, [64, True]]
+  # Layer 4  ← P3 save
+  - [-1, 2, C2f,       [64, True]]       # ch_out=24,  H/8  × W/8
 
   # Layer 5
-  - [-1, 1, Conv, [128, 3, 2]]           # out: (B, 128, H/16, W/16)
+  - [-1, 1, Conv,      [128, 3, 2]]      # ch_out=48,  H/16 × W/16
 
-  # Layer 6
-  - [-1, 2, C2f, [128, True]]
+  # Layer 6  ← P4 save
+  - [-1, 2, C2f,       [128, True]]      # ch_out=48,  H/16 × W/16
 
   # Layer 7
-  - [-1, 1, Conv, [256, 3, 2]]           # out: (B, 256, H/32, W/32)
+  - [-1, 1, Conv,      [256, 3, 2]]      # ch_out=96,  H/32 × W/32
 
   # Layer 8
-  - [-1, 1, C2f, [256, True]]
+  - [-1, 1, C2f,       [256, True]]      # ch_out=96,  H/32 × W/32
 
-  # Layer 9 — CHANGED: HoloSPPF replaces SPPF(256, 256, 5)
-  - [-1, 1, HoloSPPF, [256, 5]]
+  # Layer 9 — HoloSPPF: annular-pool + SPPF fusion
+  # args: [out_channels, pool_k]  — same signature as SPPF
+  # tasks.py HoloSPPF elif (after fix): c1=ch[f]=96, c2=make_div(256×0.375)=96
+  # calls: HoloSPPF(96, 96, 5)
+  - [-1, 1, HoloSPPF,  [256, 5]]         # ch_out=96,  H/32 × W/32
 
-
-# ── Neck (PAN-FPN) ────────────────────────────────────────────────────────────
+# ── Head (PAN-FPN + Detect) ───────────────────────────────────────────────────
 head:
-  # Upsample + P4 fusion
-  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]       # 10: upsample
-  - [[-1, 6], 1, Concat, [1]]                         # 11: cat backbone P4
-  # CHANGED: DeformC2f instead of C2f for ring-aware neck fusion
-  - [-1, 1, DeformC2f, [128, False]]                  # 12: P4/P3 neck
 
-  # Upsample + P3 fusion
-  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]       # 13: upsample
-  - [[-1, 4], 1, Concat, [1]]                         # 14: cat backbone P3
-  # CHANGED: DeformC2f for P3 neck
-  - [-1, 1, DeformC2f, [64, False]]                   # 15: P3 (small obj)
+  # Layer 10
+  - [-1,      1, nn.Upsample, [None, 2, "nearest"]]  # ch_out=96,  H/16
 
-  # Downsample + P4 fusion
-  - [-1, 1, Conv, [64, 3, 2]]                         # 16
-  - [[-1, 12], 1, Concat, [1]]                        # 17: cat P4
-  - [-1, 1, C2f, [128, False]]                        # 18: P4 (medium obj)
+  # Layer 11 — concat P5 + P4(layer 6, ch=48)
+  - [[-1, 6],  1, Concat,     [1]]                   # ch_out=144, H/16
 
-  # Downsample + P5 fusion
-  - [-1, 1, Conv, [128, 3, 2]]                        # 19
-  - [[-1, 9], 1, Concat, [1]]                         # 20: cat P5
-  - [-1, 1, C2f, [256, False]]                        # 21: P5 (large obj)
+  # Layer 12 — DeformC2f: deformable neck, ring-aware P4 fusion
+  # tasks.py base_modules (DeformC2f added after fix) + repeat_modules:
+  # c1=144, c2=make_div(128×0.375)=48, args=[144,48,1,False]
+  - [-1,      1, DeformC2f,   [128, False]]           # ch_out=48,  H/16
 
-  # Detection head — reads from P3, P4, P5
-  - [[15, 18, 21], 1, Detect, [nc]]                   # 22: Detect
+  # Layer 13
+  - [-1,      1, nn.Upsample, [None, 2, "nearest"]]  # ch_out=48,  H/8
+
+  # Layer 14 — concat P4 + P3(layer 4, ch=24)
+  - [[-1, 4],  1, Concat,     [1]]                   # ch_out=72,  H/8
+
+  # Layer 15 — DeformC2f: deformable neck, ring-aware P3 fusion
+  # c1=72, c2=make_div(64×0.375)=24, args=[72,24,1,False]
+  - [-1,      1, DeformC2f,   [64, False]]            # ch_out=24,  H/8
+
+  # Layer 16
+  - [-1,      1, Conv,        [64, 3, 2]]             # ch_out=24,  H/16
+
+  # Layer 17 — concat with neck-P4 (layer 12, ch=48)
+  - [[-1, 12], 1, Concat,     [1]]                   # ch_out=72,  H/16
+
+  # Layer 18
+  # c1=72, c2=make_div(128×0.375)=48
+  - [-1,      1, C2f,         [128, False]]           # ch_out=48,  H/16
+
+  # Layer 19
+  - [-1,      1, Conv,        [128, 3, 2]]            # ch_out=48,  H/32
+
+  # Layer 20 — concat with P5 (layer 9, ch=96)
+  - [[-1, 9],  1, Concat,     [1]]                   # ch_out=144, H/32
+
+  # Layer 21
+  # c1=144, c2=make_div(256×0.375)=96
+  - [-1,      1, C2f,         [256, False]]           # ch_out=96,  H/32
+
+  # Layer 22 — Detect: P3(15)=24ch, P4(18)=48ch, P5(21)=96ch
+  - [[15, 18, 21], 1, Detect, [nc]]
