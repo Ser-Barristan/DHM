@@ -2,136 +2,157 @@
 # FILE: ultralytics/cfg/models/v8/holoYOLOv8n.yaml
 #
 # HoloYOLOv8n — Physics-informed YOLOv8 for Digital Holographic Microscopy
-# Target: >96% accuracy, <2.5M parameters
+# Target: >96% mAP50, <2.5M parameters
 #
-# ── Changes vs vanilla YOLOv8n ───────────────────────────────────────────────
-#   Layer  0  Conv(ch,16,3,2)  →  GaborStem([1, 16])
-#   Layer  9  SPPF(256,5)      →  HoloSPPF([256, 5])
-#   Layer 12  C2f(128,False)   →  DeformC2f([128, False])
-#   Layer 15  C2f(64, False)   →  DeformC2f([64,  False])
+# ── v3 changes ────────────────────────────────────────────────────────────────
+#   • width=1.0, max_channels=256  → P5=256, P4=128, P3=64  (full channels)
+#   • depth=0.33  → keeps repeats at 1 to stay under param budget
+#   • NEW layer 10: SwinTransformer at P5 (H/32=20×20, ch=256)
+#     - Optimal placement: lowest resolution so cheapest attention (400 tokens)
+#     - window_size=4 → perfect tiling of 20×20 (5×5 windows, no padding)
+#     - num_heads=4 (256/64 per head), depth=1 (single block)
+#     - Adds global ring-shape attention AFTER HoloSPPF physics pooling
+#   • All head layer indices shifted +1 to accommodate new Swin layer
 #
-# ── GaborStem args note ───────────────────────────────────────────────────────
-#   yaml args: [in_channels, out_channels]
-#   tasks.py GaborStem branch: c2 = args[1] = 16
-#   module called as: GaborStem(1, 16)  →  in_ch=1, out_ch=16  ✓
+# ── SwinTransformer yaml args ─────────────────────────────────────────────────
+#   tasks.py puts SwinTransformer in both base_modules AND repeat_modules.
+#   base_modules injects c1,c2 and repeat_modules inserts n at index 2.
+#   So yaml args are the EXTRA args after c1,c2,n — i.e. just [num_heads, window_size].
+#   Final call: SwinTransformer(c1, c2, n, num_heads, window_size)
+#   Here: c1=256, c2=256, n=1, num_heads=4, window_size=4
 #
-# ── Channel trace (width=0.375, depth=0.33) ──────────────────────────────────
-#   Layer  0  GaborStem          ch_out=16  (raw, no width scaling in GaborStem branch)
-#   Layer  1  Conv [32]          ch_out=16  (make_div(32×0.375,8)=16)
-#   Layer  2  C2f  [32]  n=1     ch_out=16
-#   Layer  3  Conv [64]          ch_out=24  (make_div(64×0.375,8)=24)
-#   Layer  4  C2f  [64]  n=1     ch_out=24
-#   Layer  5  Conv [128]         ch_out=48  (make_div(128×0.375,8)=48)
-#   Layer  6  C2f  [128] n=1     ch_out=48
-#   Layer  7  Conv [256]         ch_out=96  (make_div(256×0.375,8)=96)
-#   Layer  8  C2f  [256] n=1     ch_out=96
-#   Layer  9  HoloSPPF [256]     ch_out=96
-#   Layer 10  Upsample           ch_out=96
-#   Layer 11  Concat[-1,6]       ch_out=144 (96+48)
-#   Layer 12  DeformC2f [128]    ch_out=48
-#   Layer 13  Upsample           ch_out=48
-#   Layer 14  Concat[-1,4]       ch_out=72  (48+24)
-#   Layer 15  DeformC2f [64]     ch_out=24
-#   Layer 16  Conv [64]          ch_out=24
-#   Layer 17  Concat[-1,12]      ch_out=72  (24+48)
-#   Layer 18  C2f  [128]         ch_out=48
-#   Layer 19  Conv [128]         ch_out=48
-#   Layer 20  Concat[-1,9]       ch_out=144 (48+96)
-#   Layer 21  C2f  [256]         ch_out=96
-#   Layer 22  Detect             in_ch=[24, 48, 96]
+# ── Channel trace (width=1.0, depth=0.33, max_channels=256) ──────────────────
+#   Layer  0  GaborStem          ch_out=16   (raw, no width scaling)
+#   Layer  1  Conv  [32]         ch_out=32
+#   Layer  2  C2f   [32]  n=1    ch_out=32
+#   Layer  3  Conv  [64]         ch_out=64
+#   Layer  4  C2f   [64]  n=1    ch_out=64    ← P3 save
+#   Layer  5  Conv  [128]        ch_out=128
+#   Layer  6  C2f   [128] n=1    ch_out=128   ← P4 save
+#   Layer  7  Conv  [256]        ch_out=256
+#   Layer  8  C2f   [256] n=1    ch_out=256
+#   Layer  9  HoloSPPF [256]     ch_out=256
+#   Layer 10  SwinTransformer    ch_out=256   ← NEW: global ring attention
+#   Layer 11  Upsample           ch_out=256
+#   Layer 12  Concat[-1,6]       ch_out=384   (256+128)
+#   Layer 13  DeformC2f [128]    ch_out=128
+#   Layer 14  Upsample           ch_out=128
+#   Layer 15  Concat[-1,4]       ch_out=192   (128+64)
+#   Layer 16  DeformC2f [64]     ch_out=64
+#   Layer 17  Conv  [64]         ch_out=64
+#   Layer 18  Concat[-1,13]      ch_out=192   (64+128)
+#   Layer 19  C2f   [128]        ch_out=128
+#   Layer 20  Conv  [128]        ch_out=128
+#   Layer 21  Concat[-1,10]      ch_out=384   (128+256)
+#   Layer 22  C2f   [256]        ch_out=256
+#   Layer 23  Detect             in=[64, 128, 256]
 #
-# ── nc and ch ─────────────────────────────────────────────────────────────────
-#   ch: 1 = raw grayscale hologram  (change GaborStem args[0] to 3 if RGB)
+# ── Why SwinT at layer 10 (after HoloSPPF)? ──────────────────────────────────
+#   • H/32 = 20×20 tokens at 640px input → only 400 tokens, cheapest possible
+#   • HoloSPPF already captures local ring energy; SwinT adds global coherence
+#     across the entire hologram field — critical for overlapping cell rings
+#   • window_size=4 gives 5×5=25 non-overlapping windows, each 4×4=16 tokens
+#   • Shifted-window attention in SwinT lets information flow across windows
+#     over 2 alternating passes within a single depth=1 block
 
-nc: 3   # SET to your actual class count
-ch: 1   # 1 = grayscale hologram
+nc: 3    # SET to your actual class count
+ch: 1    # 1 = grayscale hologram
 
 scales:
   # [depth_multiple, width_multiple, max_channels]
-  holo: [0.33, 0.375, 1024]
+  holo: [0.33, 1.0, 256]
 
 # ── Backbone ──────────────────────────────────────────────────────────────────
 backbone:
   # [from, repeats, module, args]
 
-  # Layer 0 — GaborStem: physics-informed Gabor filter bank stem
-  # args: [in_channels, out_channels]
-  # tasks.py GaborStem elif: c2 = args[1] = 16 → calls GaborStem(1, 16)
+  # Layer 0 — GaborStem: physics-informed Gabor filter bank
+  # yaml args: [in_channels, out_channels] — tasks.py GaborStem elif: c2=args[1]=16
   - [-1, 1, GaborStem, [1, 16]]          # ch_out=16,  H/2  × W/2
 
   # Layer 1
-  - [-1, 1, Conv,      [32, 3, 2]]       # ch_out=16,  H/4  × W/4
+  - [-1, 1, Conv,      [32, 3, 2]]       # ch_out=32,  H/4  × W/4
 
   # Layer 2
-  - [-1, 1, C2f,       [32, True]]       # ch_out=16,  H/4  × W/4
+  - [-1, 1, C2f,       [32, True]]       # ch_out=32,  H/4  × W/4
 
   # Layer 3
-  - [-1, 1, Conv,      [64, 3, 2]]       # ch_out=24,  H/8  × W/8
+  - [-1, 1, Conv,      [64, 3, 2]]       # ch_out=64,  H/8  × W/8
 
   # Layer 4  ← P3 save
-  - [-1, 2, C2f,       [64, True]]       # ch_out=24,  H/8  × W/8
+  - [-1, 2, C2f,       [64, True]]       # ch_out=64,  H/8  × W/8
 
   # Layer 5
-  - [-1, 1, Conv,      [128, 3, 2]]      # ch_out=48,  H/16 × W/16
+  - [-1, 1, Conv,      [128, 3, 2]]      # ch_out=128, H/16 × W/16
 
   # Layer 6  ← P4 save
-  - [-1, 2, C2f,       [128, True]]      # ch_out=48,  H/16 × W/16
+  - [-1, 2, C2f,       [128, True]]      # ch_out=128, H/16 × W/16
 
   # Layer 7
-  - [-1, 1, Conv,      [256, 3, 2]]      # ch_out=96,  H/32 × W/32
+  - [-1, 1, Conv,      [256, 3, 2]]      # ch_out=256, H/32 × W/32
 
   # Layer 8
-  - [-1, 1, C2f,       [256, True]]      # ch_out=96,  H/32 × W/32
+  - [-1, 1, C2f,       [256, True]]      # ch_out=256, H/32 × W/32
 
   # Layer 9 — HoloSPPF: annular-pool + SPPF fusion
-  # args: [out_channels, pool_k]  — same signature as SPPF
-  # tasks.py HoloSPPF elif (after fix): c1=ch[f]=96, c2=make_div(256×0.375)=96
-  # calls: HoloSPPF(96, 96, 5)
-  - [-1, 1, HoloSPPF,  [256, 5]]         # ch_out=96,  H/32 × W/32
+  # tasks.py HoloSPPF elif: c1=ch[f]=256, c2=make_div(256×1.0)=256
+  # called as: HoloSPPF(256, 256, 5)
+  - [-1, 1, HoloSPPF,  [256, 5]]         # ch_out=256, H/32 × W/32
+
+  # Layer 10 — SwinTransformer: global ring-coherence attention
+  # Placed AFTER HoloSPPF at H/32=20×20 (cheapest resolution, 400 tokens)
+  # tasks.py: SwinTransformer in base_modules+repeat_modules →
+  #   c1=256, c2=256 (from base_modules), n=1 inserted at idx 2 (repeat_modules)
+  #   args passed: [num_heads, window_size]
+  #   final call: SwinTransformer(256, 256, 1, 4, 4)
+  # window_size=4 tiles 20×20 perfectly (5×5 windows, zero padding needed)
+  - [-1, 1, SwinTransformer, [256, 4, 4]]  # ch_out=256, H/32 × W/32
+  #                            ^    ^  ^
+  #              out_channels  |    |  window_size
+  #                       num_heads  (4 heads × 64 dim = 256)
 
 # ── Head (PAN-FPN + Detect) ───────────────────────────────────────────────────
 head:
 
-  # Layer 10
-  - [-1,      1, nn.Upsample, [None, 2, "nearest"]]  # ch_out=96,  H/16
+  # Layer 11
+  - [-1,       1, nn.Upsample, [None, 2, "nearest"]]  # ch_out=256, H/16
 
-  # Layer 11 — concat P5 + P4(layer 6, ch=48)
-  - [[-1, 6],  1, Concat,     [1]]                   # ch_out=144, H/16
+  # Layer 12 — concat P5-Swin + P4 (layer 6, ch=128)
+  - [[-1, 6],  1, Concat,      [1]]                   # ch_out=384, H/16
 
-  # Layer 12 — DeformC2f: deformable neck, ring-aware P4 fusion
-  # tasks.py base_modules (DeformC2f added after fix) + repeat_modules:
-  # c1=144, c2=make_div(128×0.375)=48, args=[144,48,1,False]
-  - [-1,      1, DeformC2f,   [128, False]]           # ch_out=48,  H/16
+  # Layer 13 — DeformC2f: ring-aware P4 fusion
+  # c1=384, c2=make_div(128×1.0)=128
+  - [-1,       1, DeformC2f,   [128, False]]           # ch_out=128, H/16
 
-  # Layer 13
-  - [-1,      1, nn.Upsample, [None, 2, "nearest"]]  # ch_out=48,  H/8
+  # Layer 14
+  - [-1,       1, nn.Upsample, [None, 2, "nearest"]]  # ch_out=128, H/8
 
-  # Layer 14 — concat P4 + P3(layer 4, ch=24)
-  - [[-1, 4],  1, Concat,     [1]]                   # ch_out=72,  H/8
+  # Layer 15 — concat P4 + P3 (layer 4, ch=64)
+  - [[-1, 4],  1, Concat,      [1]]                   # ch_out=192, H/8
 
-  # Layer 15 — DeformC2f: deformable neck, ring-aware P3 fusion
-  # c1=72, c2=make_div(64×0.375)=24, args=[72,24,1,False]
-  - [-1,      1, DeformC2f,   [64, False]]            # ch_out=24,  H/8
+  # Layer 16 — DeformC2f: ring-aware P3 fusion (small objects)
+  # c1=192, c2=make_div(64×1.0)=64
+  - [-1,       1, DeformC2f,   [64, False]]            # ch_out=64,  H/8
 
-  # Layer 16
-  - [-1,      1, Conv,        [64, 3, 2]]             # ch_out=24,  H/16
+  # Layer 17
+  - [-1,       1, Conv,        [64, 3, 2]]             # ch_out=64,  H/16
 
-  # Layer 17 — concat with neck-P4 (layer 12, ch=48)
-  - [[-1, 12], 1, Concat,     [1]]                   # ch_out=72,  H/16
-
-  # Layer 18
-  # c1=72, c2=make_div(128×0.375)=48
-  - [-1,      1, C2f,         [128, False]]           # ch_out=48,  H/16
+  # Layer 18 — concat with neck-P4 (layer 13, ch=128)
+  - [[-1, 13], 1, Concat,      [1]]                   # ch_out=192, H/16
 
   # Layer 19
-  - [-1,      1, Conv,        [128, 3, 2]]            # ch_out=48,  H/32
+  # c1=192, c2=128
+  - [-1,       1, C2f,         [128, False]]           # ch_out=128, H/16
 
-  # Layer 20 — concat with P5 (layer 9, ch=96)
-  - [[-1, 9],  1, Concat,     [1]]                   # ch_out=144, H/32
+  # Layer 20
+  - [-1,       1, Conv,        [128, 3, 2]]            # ch_out=128, H/32
 
-  # Layer 21
-  # c1=144, c2=make_div(256×0.375)=96
-  - [-1,      1, C2f,         [256, False]]           # ch_out=96,  H/32
+  # Layer 21 — concat with P5-Swin (layer 10, ch=256)
+  - [[-1, 10], 1, Concat,      [1]]                   # ch_out=384, H/32
 
-  # Layer 22 — Detect: P3(15)=24ch, P4(18)=48ch, P5(21)=96ch
-  - [[15, 18, 21], 1, Detect, [nc]]
+  # Layer 22
+  # c1=384, c2=256
+  - [-1,       1, C2f,         [256, False]]           # ch_out=256, H/32
+
+  # Layer 23 — Detect: P3(16)=64ch, P4(19)=128ch, P5(22)=256ch
+  - [[16, 19, 22], 1, Detect,  [nc]]
