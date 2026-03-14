@@ -348,8 +348,9 @@ class DualStreamStem(nn.Module):
                   f"DualStreamStem received tensor with 0 channels: {x.shape}"
             )
 
-        if x.shape[1] > self.in_channels:
-            x = x[:, :self.in_channels]
+        # Ensure hologram stays grayscale
+      if x.shape[1] != 1:
+          x = x.mean(dim=1, keepdim=True)
 
         elif x.shape[1] < self.in_channels:
     # replicate channels if grayscale expected but missing
