@@ -20,7 +20,7 @@ Examples:
 from .gabor import GaborStem
 from .radial_attn import AnnularPool, HoloSPPF
 from .deform_c2f import DeformBottleneck, DeformC2f
-from .holo_detect import HoloDetect
+from .HoloDetect import HoloDetect
 from .phase_stream import GaborPyramid, PhaseGate, DualStreamStem, OrdinalMorphLoss
 from .block import (
     C1,
