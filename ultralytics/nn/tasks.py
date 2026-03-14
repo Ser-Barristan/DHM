@@ -17,6 +17,14 @@ from ultralytics.nn.modules.fhnet_modules import DSC2f, SimAM, FringeBlock
 globals()['DSC2f'] = DSC2f
 globals()['SimAM'] = SimAM
 globals()['FringeBlock'] = FringeBlock
+globals()['GaborStem'] = GaborStem
+globals()['HoloSPPF'] = HoloSPPF
+globals()['AnnularPool'] = AnnularPool
+globals()['DeformC2f'] = DeformC2f
+globals()['HoloDetect'] = HoloDetect
+globals()['DualStreamStem'] = DualStreamStem
+globals()['PhaseGate'] = PhaseGate
+
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
