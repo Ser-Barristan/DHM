@@ -51,7 +51,7 @@ class AnnularPool(nn.Module):
         pool_size (int): fixed spatial size used for mask application (default 13)
     """
 
-    def __init__(self, channels: int, n_rings: int = 6, pool_size: int = 17):
+    def __init__(self, channels: int, n_rings: int = 8, pool_size: int = 17):
         super().__init__()
         self.channels  = channels
         self.n_rings   = n_rings
@@ -144,7 +144,7 @@ class HoloSPPF(nn.Module):
         self.cv2  = self._conv(c_ * 4, c2, 1)
 
         # ── Path B: annular-pool ──────────────────────────────────────────
-        self.annular  = AnnularPool(c1, n_rings=6, pool_size=17)
+        self.annular  = AnnularPool(c1, n_rings=8, pool_size=17)
         self.ann_proj = self._conv(c1, c2, 1)
 
         # ── Fusion gate ───────────────────────────────────────────────────
