@@ -92,4 +92,4 @@ head:
   - [-1, 1, C2f, [256, False]]
 
   # 26 HoloDetect
-  - [[19, 22, 25], 1, HoloDetect, [nc]]
+  - [[19, 22, 25], 1, Detect, [nc]]
