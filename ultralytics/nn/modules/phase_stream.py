@@ -342,18 +342,25 @@ class DualStreamStem(nn.Module):
         self.phase_cache: dict = {}
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Ensure hologram stays single channel
-        if x.shape[1] != 1:
-            x = x.mean(dim=1, keepdim=True)
     
-        # Stream B: compute phase embedding
+        # Ensure input always has 1 channel
+        if x.ndim == 4:
+            if x.shape[1] == 3:
+                x = x.mean(dim=1, keepdim=True)   # RGB → grayscale
+            elif x.shape[1] == 1:
+                pass                              # already correct
+            elif x.shape[1] == 0:
+                raise RuntimeError(f"Invalid tensor with 0 channels: {x.shape}")
+            else:
+                x = x[:, :1]                      # force single channel
+    
+        # Stream B
         with torch.cuda.amp.autocast(enabled=False):
             phase_emb = self.phase_pyramid(x.float())
     
-        # Save embedding for PhaseGate modules
         self.phase_cache["emb"] = phase_emb
     
-        # Stream A: spatial features
+        # Stream A
         x = self.gabor(x)
         x = self.dw(x)
         x = self.act(self.bn(self.pw(x)))
