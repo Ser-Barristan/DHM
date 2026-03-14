@@ -17,6 +17,11 @@ from ultralytics.nn.modules.fhnet_modules import DSC2f, SimAM, FringeBlock
 globals()['DSC2f'] = DSC2f
 globals()['SimAM'] = SimAM
 globals()['FringeBlock'] = FringeBlock
+from ultralytics.nn.modules.gabor import GaborStem
+from ultralytics.nn.modules.radial_attn import HoloSPPF, AnnularPool
+from ultralytics.nn.modules.deform_c2f import DeformC2f
+from ultralytics.nn.modules.HoloDetect import HoloDetect
+from ultralytics.nn.modules.phase_stream import DualStreamStem, PhaseGate
 globals()['GaborStem'] = GaborStem
 globals()['HoloSPPF'] = HoloSPPF
 globals()['AnnularPool'] = AnnularPool
