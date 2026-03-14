@@ -342,31 +342,23 @@ class DualStreamStem(nn.Module):
         self.phase_cache: dict = {}
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Ensure correct channel count
-        if x.shape[1] == 0:
-            raise RuntimeError(
-                  f"DualStreamStem received tensor with 0 channels: {x.shape}"
-            )
+    # Ensure hologram stays single-channel
+    if x.shape[1] != 1:
+        x = x.mean(dim=1, keepdim=True)
 
-        # Ensure hologram stays grayscale
-      if x.shape[1] != 1:
-          x = x.mean(dim=1, keepdim=True)
+    # Stream B: compute phase embedding
+    with torch.cuda.amp.autocast(enabled=False):
+        phase_emb = self.phase_pyramid(x.float())
 
-        elif x.shape[1] < self.in_channels:
-    # replicate channels if grayscale expected but missing
-              x = x.repeat(1, self.in_channels // max(x.shape[1],1), 1, 1)
+    # Store embedding for PhaseGate layers
+    self.phase_cache["emb"] = phase_emb
 
-        # Stream B: compute phase embedding and store in cache
-        with torch.cuda.amp.autocast(enabled=False):
-            # Phase pyramid needs float32 for Gabor kernel precision
-            phase_emb = self.phase_pyramid(x.float())
-        self.phase_cache["emb"] = phase_emb
+    # Stream A: spatial features
+    x = self.gabor(x)
+    x = self.dw(x)
+    x = self.act(self.bn(self.pw(x)))
 
-        # Stream A: spatial features
-        x = self.gabor(x)
-        x = self.dw(x)
-        x = self.act(self.bn(self.pw(x)))
-        return x
+    return x
 
 
 # ── OrdinalMorphLoss ──────────────────────────────────────────────────────────
