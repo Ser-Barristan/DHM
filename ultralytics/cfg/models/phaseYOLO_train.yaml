@@ -1,0 +1,68 @@
+# PhaseYOLO training hyperparameters
+# Novel dual-stream model for RBC oxygenation classification in DHM
+
+task: detect
+mode: train
+
+device: 0
+workers: 8
+batch: 16
+imgsz: 640           # dataset fixed at 640
+
+epochs: 300
+patience: 80
+save_period: -1
+resume: False
+
+# ── Optimiser ─────────────────────────────────────────────────────────────────
+optimizer: SGD
+lr0: 0.01
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 5.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+# ── Loss ──────────────────────────────────────────────────────────────────────
+box: 5.0             # easy — all RBCs same size
+cls: 2.0             # hard — intra-class morphology discrimination
+dfl: 1.5
+fl_gamma: 1.5        # focal loss — focus on hard hypoxia examples
+cls_pw: 1.5          # positive weight — penalise hypoxia misses more
+label_smoothing: 0.1 # normoxia is biologically transitional
+
+# ── Augmentation ──────────────────────────────────────────────────────────────
+hsv_h: 0.0           # hologram: no hue
+hsv_s: 0.0
+hsv_v: 0.3           # mild illumination variation
+
+degrees: 180.0       # RBC disc has full rotational symmetry
+translate: 0.1
+scale: 0.15          # tiny — morphology encodes class
+shear: 0.0
+perspective: 0.0
+flipud: 0.5
+fliplr: 0.5
+
+mosaic: 1.0
+mixup: 0.0           # no mixing of subtypes
+copy_paste: 0.1      # light copy-paste for hypoxia diversity
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+val: True
+plots: True
+conf: 0.25
+iou: 0.50
+max_det: 300
+project: runs/phaseyolo
+name: PhaseYOLO_v1
+exist_ok: False
+pretrained: False
+verbose: True
+seed: 42
+deterministic: True
+cos_lr: True
+close_mosaic: 15
+amp: True
+dropout: 0.0
