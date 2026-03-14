@@ -342,8 +342,18 @@ class DualStreamStem(nn.Module):
         self.phase_cache: dict = {}
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.shape[1] != self.in_channels:
+        # Ensure correct channel count
+        if x.shape[1] == 0:
+            raise RuntimeError(
+                  f"DualStreamStem received tensor with 0 channels: {x.shape}"
+            )
+
+        if x.shape[1] > self.in_channels:
             x = x[:, :self.in_channels]
+
+        elif x.shape[1] < self.in_channels:
+    # replicate channels if grayscale expected but missing
+              x = x.repeat(1, self.in_channels // max(x.shape[1],1), 1, 1)
 
         # Stream B: compute phase embedding and store in cache
         with torch.cuda.amp.autocast(enabled=False):
