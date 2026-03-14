@@ -150,7 +150,7 @@ class GaborPyramid(nn.Module):
         for band_freqs in self.bands:
             n_f     = len(band_freqs)
             n_gabor = n_f * n_orient
-            band_dim = n_gabor * in_channels
+            band_dim = n_gabor
 
             # learnable frequency, orientation, sigma per filter
             freq_init  = torch.tensor(band_freqs, dtype=torch.float32).repeat(n_orient)
