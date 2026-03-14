@@ -39,7 +39,7 @@ class GaborFilterBank(nn.Module):
         in_channels: int = 1,
         out_channels: int = 32,
         kernel_size: int = 15,
-        base_freqs: tuple = (0.05, 0.08, 0.12, 0.16, 0.20, 0.25),
+        base_freqs: tuple = (0.08, 0.10, 0.12, 0.15, 0.18, 0.22),
         n_orient: int = 12,
     ):
         super().__init__()
@@ -187,7 +187,7 @@ class GaborStem(nn.Module):
             in_channels=in_channels,
             out_channels=mid,
             kernel_size=15,
-            base_freqs=(0.05, 0.08, 0.12, 0.16, 0.20, 0.25),
+            base_freqs=(0.08, 0.10, 0.12, 0.15, 0.18, 0.22),
             n_orient=12,
         )
         # Stride-2 depthwise-separable (cheap) downsample
