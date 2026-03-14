@@ -157,7 +157,7 @@ class DualStreamStem(nn.Module):
         )
 
         self.dw = nn.Conv2d(mid, mid, 3, stride=2, padding=1, groups=mid, bias=False)
-        self.pw = nn.Conv2d(mid, out_channels, 1, bias=False)
+        self.pw = nn.Conv2d(mid, 3, 1, bias=False)
 
         self.bn = nn.BatchNorm2d(out_channels)
         self.act = nn.SiLU(inplace=True)
