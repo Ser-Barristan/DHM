@@ -157,9 +157,13 @@ class DualStreamStem(nn.Module):
         )
 
         self.dw = nn.Conv2d(mid, mid, 3, stride=2, padding=1, groups=mid, bias=False)
+
+        # convert to RGB-like channels so YOLO backbone works
         self.pw = nn.Conv2d(mid, 3, 1, bias=False)
 
-        self.bn = nn.BatchNorm2d(out_channels)
+        # BN must match pw output
+        self.bn = nn.BatchNorm2d(3)
+
         self.act = nn.SiLU(inplace=True)
 
         self.phase_pyramid = GaborPyramid(1, phase_dim)
@@ -168,36 +172,28 @@ class DualStreamStem(nn.Module):
 
     def forward(self, x):
 
-        # --------- CRITICAL FIX ---------
-        # Guarantee tensor shape is (B,1,H,W)
-
         if x.ndim == 3:
             x = x.unsqueeze(1)
 
         if x.ndim != 4:
             raise RuntimeError(f"Invalid tensor shape {x.shape}")
 
-        # If tensor has zero channels (augmentation bug), repair it
         if x.shape[1] == 0:
             x = torch.zeros(x.shape[0],1,x.shape[2],x.shape[3], device=x.device)
 
-        # Convert RGB → grayscale
         if x.shape[1] > 1:
             x = x.mean(dim=1, keepdim=True)
 
-        # Guarantee exactly 1 channel
         if x.shape[1] != 1:
             x = x[:,0:1,:,:]
 
-        # --------- Phase stream ---------
-
+        # Phase stream
         with torch.cuda.amp.autocast(enabled=False):
             phase_emb = self.phase_pyramid(x.float())
 
         self.phase_cache["emb"] = phase_emb
 
-        # --------- Spatial stream ---------
-
+        # Spatial stream
         x = self.gabor(x)
         x = self.dw(x)
         x = self.act(self.bn(self.pw(x)))
