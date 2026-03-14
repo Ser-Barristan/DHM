@@ -204,7 +204,7 @@ class GaborPyramid(nn.Module):
 
         # Apply to each input channel
         responses = []
-        for c in range(x.shape[1]):
+        for c in range(1):
             xc = x[:, c:c+1]
             responses.append(F.conv2d(xc, W, padding=half))
         feat = torch.cat(responses, dim=1)               # (B, n*in_ch, H, W)
