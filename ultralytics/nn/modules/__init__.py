@@ -11,7 +11,7 @@ INSTRUCTIONS:
   Everything else is identical to the original file so you can
   safely overwrite it.  Verified against ultralytics 8.3.x.
 """
-
+from .TF import SwinTransformer
 from .block import (
     C1,
     C2,
@@ -111,7 +111,7 @@ __all__ = (
     "OBB", "Classify", "Detect", "Pose", "RTDETRDecoder", "Segment",
     "WorldDetect", "v10Detect",
     # transformer
-    "AIFI", "MLP", "DeformableTransformerDecoder",
+    "AIFI", "MLP", "DeformableTransformerDecoder",SwinTransformer,
     "DeformableTransformerDecoderLayer", "LayerNorm2d", "MLPBlock",
     "MSDeformAttn", "TransformerBlock", "TransformerEncoderLayer",
     "TransformerLayer",
