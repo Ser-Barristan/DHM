@@ -10,8 +10,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from ultralytics.nn.modules.conv import simam
-from ultralytics.nn.modules.TF import SwinTransformer
-globals()['SwinTransformer'] = SwinTransformer
+
 globals()['simam'] = simam
 from ultralytics.nn.modules.fhnet_modules import DSC2f, SimAM, FringeBlock
 globals()['DSC2f'] = DSC2f
@@ -33,7 +32,6 @@ globals()['PhaseGate'] = PhaseGate
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
-    SwinTransformer,
     GaborStem,
     HoloSPPF,
     DeformC2f,
@@ -1637,7 +1635,6 @@ def parse_model(d, ch, verbose=True):
     base_modules = frozenset(
         {
             Classify,
-            SwinTransformer,
             Conv,
             ConvTranspose,
             GhostConv,
@@ -1680,7 +1677,6 @@ def parse_model(d, ch, verbose=True):
     repeat_modules = frozenset(  # modules with 'repeat' arguments
         {
             BottleneckCSP,
-            SwinTransformer,
             C1,
             C2,
             C2f,
