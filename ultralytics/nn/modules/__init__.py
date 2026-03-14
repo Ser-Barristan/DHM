@@ -1,24 +1,31 @@
-# Ultralytics YOLO 🚀, AGPL-3.0 license
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """
-FILE PATH IN YOUR FORK: ultralytics/nn/modules/__init__.py
+Ultralytics neural network modules.
 
-INSTRUCTIONS:
-  This is a COMPLETE REPLACEMENT of the file.
-  The only change vs vanilla ultralytics is the addition of:
-    - 3 new import lines  (marked ── HoloYOLO additions ──)
-    - 5 new names in __all__
+This module provides access to various neural network components used in Ultralytics models, including convolution
+blocks, attention mechanisms, transformer components, and detection/segmentation heads.
 
-  Everything else is identical to the original file so you can
-  safely overwrite it.  Verified against ultralytics 8.3.x.
+Examples:
+    Visualize a module with Netron
+    >>> from ultralytics.nn.modules import Conv
+    >>> import torch
+    >>> import subprocess
+    >>> x = torch.ones(1, 128, 40, 40)
+    >>> m = Conv(128, 128)
+    >>> f = f"{m._get_name()}.onnx"
+    >>> torch.onnx.export(m, x, f)
+    >>> subprocess.run(f"onnxslim {f} {f} && open {f}", shell=True, check=True)  # pip install onnxslim
 """
-from .TF import SwinTransformer
+# ── HoloYOLO additions ────────────────────────────────────────────────────────
+from .gabor import GaborStem
+from .radial_attn import AnnularPool, HoloSPPF
+from .deform_c2f import DeformBottleneck, DeformC2f
+from .holo_detect import HoloDetect
+from .phase_stream import GaborPyramid, PhaseGate, DualStreamStem, OrdinalMorphLoss
 from .block import (
     C1,
     C2,
     C2PSA,
-    C2f,
-    C2fAttn,
-    C2fCIB,
     C3,
     C3TR,
     CIB,
@@ -28,12 +35,20 @@ from .block import (
     SPP,
     SPPELAN,
     SPPF,
+    A2C2f,
     AConv,
     ADown,
     Attention,
     BNContrastiveHead,
     Bottleneck,
     BottleneckCSP,
+    C2f,
+    C2fAttn,
+    C2fCIB,
+    C2fPSA,
+    C3Ghost,
+    C3k2,
+    C3x,
     CBFuse,
     CBLinear,
     ContrastiveHead,
@@ -41,11 +56,14 @@ from .block import (
     HGBlock,
     HGStem,
     ImagePoolingAttn,
+    MaxSigmoidAttnBlock,
     Proto,
     RepC3,
     RepNCSPELAN4,
+    RepVGGDW,
     ResNetLayer,
     SCDown,
+    TorchVision,
 )
 from .conv import (
     CBAM,
@@ -58,18 +76,26 @@ from .conv import (
     DWConvTranspose2d,
     Focus,
     GhostConv,
+    Index,
     LightConv,
     RepConv,
     SpatialAttention,
 )
 from .head import (
     OBB,
+    OBB26,
     Classify,
     Detect,
+    LRPCHead,
     Pose,
+    Pose26,
     RTDETRDecoder,
     Segment,
+    Segment26,
     WorldDetect,
+    YOLOEDetect,
+    YOLOESegment,
+    YOLOESegment26,
     v10Detect,
 )
 from .transformer import (
@@ -85,45 +111,85 @@ from .transformer import (
     TransformerLayer,
 )
 
-# ── HoloYOLO additions ────────────────────────────────────────────────────────
-from .gabor import GaborStem                                 # physics-informed stem
-from .radial_attn import AnnularPool, HoloSPPF               # ring-aware SPPF
-from .deform_c2f import DeformBottleneck, DeformC2f          # deformable neck
-from .HoloDetect import HoloDetect                          # deep cls head for RBC subtypes
-from .phase_stream import (                                  # PhaseYOLO dual-stream
-    GaborPyramid, PhaseGate, DualStreamStem, OrdinalMorphLoss
-)
-# ─────────────────────────────────────────────────────────────────────────────
-
 __all__ = (
-    # block
-    "C1", "C2", "C2PSA", "C2f", "C2fAttn", "C2fCIB", "C3", "C3TR", "CIB",
-    "DFL", "ELAN1", "PSA", "SPP", "SPPELAN", "SPPF",
-    "AConv", "ADown", "Attention", "BNContrastiveHead", "Bottleneck",
-    "BottleneckCSP", "CBFuse", "CBLinear", "ContrastiveHead",
-    "GhostBottleneck", "HGBlock", "HGStem", "ImagePoolingAttn",
-    "Proto", "RepC3", "RepNCSPELAN4", "ResNetLayer", "SCDown",
-    # conv
-    "CBAM", "ChannelAttention", "Concat", "Conv", "Conv2", "ConvTranspose",
-    "DWConv", "DWConvTranspose2d", "Focus", "GhostConv", "LightConv",
-    "RepConv", "SpatialAttention",
-    # head
-    "OBB", "Classify", "Detect", "Pose", "RTDETRDecoder", "Segment",
-    "WorldDetect", "v10Detect",
-    # transformer
-    "AIFI", "MLP", "DeformableTransformerDecoder", "SwinTransformer",
-    "DeformableTransformerDecoderLayer", "LayerNorm2d", "MLPBlock",
-    "MSDeformAttn", "TransformerBlock", "TransformerEncoderLayer",
+    "AIFI",
+    "C1",
+    "C2",
+    "C2PSA",
+    "C3",
+    "C3TR",
+    "CBAM",
+    "CIB",
+    "DFL",
+    "ELAN1",
+    "MLP",
+    "OBB",
+    "OBB26",
+    "PSA",
+    "SPP",
+    "SPPELAN",
+    "SPPF",
+    "A2C2f",
+    "AConv",
+    "ADown",
+    "Attention",
+    "BNContrastiveHead",
+    "Bottleneck",
+    "BottleneckCSP",
+    "C2f",
+    "C2fAttn",
+    "C2fCIB",
+    "C2fPSA",
+    "C3Ghost",
+    "C3k2",
+    "C3x",
+    "CBFuse",
+    "CBLinear",
+    "ChannelAttention",
+    "Classify",
+    "Concat",
+    "ContrastiveHead",
+    "Conv",
+    "Conv2",
+    "ConvTranspose",
+    "DWConv",
+    "DWConvTranspose2d",
+    "DeformableTransformerDecoder",
+    "DeformableTransformerDecoderLayer",
+    "Detect",
+    "Focus",
+    "GhostBottleneck",
+    "GhostConv",
+    "HGBlock",
+    "HGStem",
+    "ImagePoolingAttn",
+    "Index",
+    "LRPCHead",
+    "LayerNorm2d",
+    "LightConv",
+    "MLPBlock",
+    "MSDeformAttn",
+    "MaxSigmoidAttnBlock",
+    "Pose",
+    "Pose26",
+    "Proto",
+    "RTDETRDecoder",
+    "RepC3",
+    "RepConv",
+    "RepNCSPELAN4",
+    "RepVGGDW",
+    "ResNetLayer",
+    "SCDown",
+    "Segment",
+    "Segment26",
+    "SpatialAttention",
+    "TorchVision",
+    "TransformerBlock",
+    "TransformerEncoderLayer",
     "TransformerLayer",
-    # ── HoloYOLO ─────────────────────────────────────────────
-    "GaborStem",
-    "AnnularPool",
-    "HoloSPPF",
-    "DeformBottleneck",
-    "DeformC2f",
-    "HoloDetect",
-    "GaborPyramid",
-    "PhaseGate",
-    "DualStreamStem",
-    "OrdinalMorphLoss",
+    "WorldDetect",
+    "YOLOEDetect",
+    "YOLOESegment",
+    "YOLOESegment26",
+    "v10Detect",
 )
