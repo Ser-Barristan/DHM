@@ -10,6 +10,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from ultralytics.nn.modules.conv import simam
+from ultralytics.nn.modules.TF import SwinTransformer
+globals()['SwinTransformer'] = SwinTransformer
 
 globals()['simam'] = simam
 from ultralytics.nn.modules.fhnet_modules import DSC2f, SimAM, FringeBlock
@@ -1640,6 +1642,7 @@ def parse_model(d, ch, verbose=True):
             GhostConv,
             Bottleneck,
             GhostBottleneck,
+            SwinTransformer,
             SPP,
             SPPF,
             C2fPSA,
@@ -1678,6 +1681,7 @@ def parse_model(d, ch, verbose=True):
         {
             BottleneckCSP,
             C1,
+            SwinTransformer,
             C2,
             C2f,
             DeformC2f,
