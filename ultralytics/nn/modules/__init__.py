@@ -16,6 +16,7 @@ Examples:
     >>> torch.onnx.export(m, x, f)
     >>> os.system(f"onnxslim {f} {f} && open {f}")  # pip install onnxslim
 """
+from .HoloDetect import HoloDetect
 from .gabor import GaborStem
 from .radial_attn import AnnularPool, HoloSPPF
 from .deform_c2f import DeformBottleneck, DeformC2f
@@ -123,6 +124,7 @@ __all__ = (
     "GaborStem",
     "AnnularPool",
     "HoloSPPF",
+    "HoloDetect",
     "DeformBottleneck",
     "DeformC2f",
     "SpatialAttention",
