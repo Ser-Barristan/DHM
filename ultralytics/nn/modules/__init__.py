@@ -111,7 +111,7 @@ __all__ = (
     "OBB", "Classify", "Detect", "Pose", "RTDETRDecoder", "Segment",
     "WorldDetect", "v10Detect",
     # transformer
-    "AIFI", "MLP", "DeformableTransformerDecoder",SwinTransformer,
+    "AIFI", "MLP", "DeformableTransformerDecoder", "SwinTransformer",
     "DeformableTransformerDecoderLayer", "LayerNorm2d", "MLPBlock",
     "MSDeformAttn", "TransformerBlock", "TransformerEncoderLayer",
     "TransformerLayer",
