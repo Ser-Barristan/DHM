@@ -39,8 +39,8 @@ class GaborFilterBank(nn.Module):
         in_channels: int = 1,
         out_channels: int = 32,
         kernel_size: int = 15,
-        base_freqs: tuple = (0.05, 0.10, 0.15, 0.20),
-        n_orient: int = 8,
+        base_freqs: tuple = (0.05, 0.08, 0.12, 0.16, 0.20, 0.25),
+        n_orient: int = 12,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -160,7 +160,7 @@ class GaborStem(nn.Module):
               via the GaborStem branch you added to parse_model().
 
     Architecture:
-        GaborFilterBank(in_ch → 32, same spatial size)
+        GaborFilterBank(in_ch → 64, same spatial size)
         → DW-conv(32, k=3, s=2)          # stride-2 downsample
         → PW-conv(32 → out_channels)
         → BN → SiLU
@@ -179,7 +179,7 @@ class GaborStem(nn.Module):
         super().__init__()
         out_channels = int(out_channels)
         in_channels  = int(in_channels)    # 1 = grayscale, 3 = RGB
-        mid          = 32
+        mid          = 64
 
         self.in_channels = in_channels     # stored so forward can validate
 
@@ -187,8 +187,8 @@ class GaborStem(nn.Module):
             in_channels=in_channels,
             out_channels=mid,
             kernel_size=15,
-            base_freqs=(0.05, 0.10, 0.15, 0.20),
-            n_orient=8,
+            base_freqs=(0.05, 0.08, 0.12, 0.16, 0.20, 0.25),
+            n_orient=12,
         )
         # Stride-2 depthwise-separable (cheap) downsample
         self.dw  = nn.Conv2d(mid, mid, kernel_size=3, stride=2, padding=1, groups=mid, bias=False)
