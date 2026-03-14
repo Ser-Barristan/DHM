@@ -89,7 +89,7 @@ from .transformer import (
 from .gabor import GaborStem                                 # physics-informed stem
 from .radial_attn import AnnularPool, HoloSPPF               # ring-aware SPPF
 from .deform_c2f import DeformBottleneck, DeformC2f          # deformable neck
-from .holo_detect import HoloDetect                          # deep cls head for RBC subtypes
+from .HoloDetect import HoloDetect                          # deep cls head for RBC subtypes
 from .phase_stream import (                                  # PhaseYOLO dual-stream
     GaborPyramid, PhaseGate, DualStreamStem, OrdinalMorphLoss
 )
