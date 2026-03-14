@@ -7,21 +7,26 @@ blocks, attention mechanisms, transformer components, and detection/segmentation
 
 Examples:
     Visualize a module with Netron
-    >>> from ultralytics.nn.modules import Conv
+    >>> from ultralytics.nn.modules import *
     >>> import torch
-    >>> import subprocess
+    >>> import os
     >>> x = torch.ones(1, 128, 40, 40)
     >>> m = Conv(128, 128)
     >>> f = f"{m._get_name()}.onnx"
     >>> torch.onnx.export(m, x, f)
-    >>> subprocess.run(f"onnxslim {f} {f} && open {f}", shell=True, check=True)  # pip install onnxslim
+    >>> os.system(f"onnxslim {f} {f} && open {f}")  # pip install onnxslim
 """
+from .HoloDetect import HoloDetect
 # ── HoloYOLO additions ────────────────────────────────────────────────────────
 from .gabor import GaborStem
 from .radial_attn import AnnularPool, HoloSPPF
 from .deform_c2f import DeformBottleneck, DeformC2f
-from .HoloDetect import HoloDetect
 from .phase_stream import GaborPyramid, PhaseGate, DualStreamStem, OrdinalMorphLoss
+from .gabor import GaborStem
+from .radial_attn import AnnularPool, HoloSPPF
+from .deform_c2f import DeformBottleneck, DeformC2f
+from .TF import SwinTransformer
+from .fhnet_modules import DSC2f, SimAM, FringeBlock
 from .block import (
     C1,
     C2,
@@ -67,6 +72,8 @@ from .block import (
 )
 from .conv import (
     CBAM,
+    HSFPN,
+    simam,
     ChannelAttention,
     Concat,
     Conv,
@@ -83,19 +90,15 @@ from .conv import (
 )
 from .head import (
     OBB,
-    OBB26,
     Classify,
     Detect,
     LRPCHead,
     Pose,
-    Pose26,
     RTDETRDecoder,
     Segment,
-    Segment26,
     WorldDetect,
     YOLOEDetect,
     YOLOESegment,
-    YOLOESegment26,
     v10Detect,
 )
 from .transformer import (
@@ -112,84 +115,87 @@ from .transformer import (
 )
 
 __all__ = (
-    "AIFI",
-    "C1",
-    "C2",
-    "C2PSA",
-    "C3",
-    "C3TR",
-    "CBAM",
-    "CIB",
-    "DFL",
-    "ELAN1",
-    "MLP",
-    "OBB",
-    "OBB26",
-    "PSA",
-    "SPP",
-    "SPPELAN",
-    "SPPF",
-    "A2C2f",
-    "AConv",
-    "ADown",
-    "Attention",
-    "BNContrastiveHead",
-    "Bottleneck",
-    "BottleneckCSP",
-    "C2f",
-    "C2fAttn",
-    "C2fCIB",
-    "C2fPSA",
-    "C3Ghost",
-    "C3k2",
-    "C3x",
-    "CBFuse",
-    "CBLinear",
-    "ChannelAttention",
-    "Classify",
-    "Concat",
-    "ContrastiveHead",
     "Conv",
+    "HSFPN",
     "Conv2",
-    "ConvTranspose",
+    "LightConv",
+    "RepConv",
     "DWConv",
     "DWConvTranspose2d",
-    "DeformableTransformerDecoder",
-    "DeformableTransformerDecoderLayer",
-    "Detect",
+    "ConvTranspose",
     "Focus",
-    "GhostBottleneck",
     "GhostConv",
+    "ChannelAttention",
+    "GaborStem",
+    "AnnularPool",
+    "HoloSPPF",
+    "HoloDetect",
+    "DeformBottleneck",
+    "DeformC2f",
+    "SpatialAttention",
+    "CBAM",
+    "Concat",
+    "TransformerLayer",
+    "TransformerBlock",
+    "MLPBlock",
+    "LayerNorm2d",
+    "DFL",
     "HGBlock",
     "HGStem",
-    "ImagePoolingAttn",
-    "Index",
-    "LRPCHead",
-    "LayerNorm2d",
-    "LightConv",
-    "MLPBlock",
-    "MSDeformAttn",
-    "MaxSigmoidAttnBlock",
-    "Pose",
-    "Pose26",
-    "Proto",
-    "RTDETRDecoder",
-    "RepC3",
-    "RepConv",
-    "RepNCSPELAN4",
-    "RepVGGDW",
-    "ResNetLayer",
+    "SPP",
+    "SPPF",
+    "C1",
+    "C2",
+    "C3",
+    "C2f",
+    "C3k2",
     "SCDown",
+    "C2fPSA",
+    "C2PSA",
+    "C2fAttn",
+    "C3x",
+    "C3TR",
+    "C3Ghost",
+    "GhostBottleneck",
+    "Bottleneck",
+    "BottleneckCSP",
+    "Proto",
+    "Detect",
     "Segment",
-    "Segment26",
-    "SpatialAttention",
-    "TorchVision",
-    "TransformerBlock",
+    "Pose",
+    "Classify",
     "TransformerEncoderLayer",
-    "TransformerLayer",
+    "RepC3",
+    "RTDETRDecoder",
+    "AIFI",
+    "DeformableTransformerDecoder",
+    "DeformableTransformerDecoderLayer",
+    "MSDeformAttn",
+    "MLP",
+    "ResNetLayer",
+    "OBB",
     "WorldDetect",
     "YOLOEDetect",
     "YOLOESegment",
-    "YOLOESegment26",
     "v10Detect",
+    "LRPCHead",
+    "ImagePoolingAttn",
+    "MaxSigmoidAttnBlock",
+    "ContrastiveHead",
+    "BNContrastiveHead",
+    "RepNCSPELAN4",
+    "ADown",
+    "SPPELAN",
+    "CBFuse",
+    "CBLinear",
+    "AConv",
+    "ELAN1",
+    "RepVGGDW",
+    "CIB",
+    "C2fCIB",
+    "Attention",
+    "PSA",
+    "TorchVision",
+    "Index",
+    "A2C2f",
 )
