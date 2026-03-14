@@ -343,25 +343,28 @@ class DualStreamStem(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
     
-        # Ensure tensor has at least one channel
-        if x.shape[1] == 0:
-            raise RuntimeError(f"Invalid input with 0 channels: {x.shape}")
+        # ---- ensure correct tensor shape ----
+        if x.ndim == 3:                     # (B,H,W)
+            x = x.unsqueeze(1)              # -> (B,1,H,W)
     
-        # Convert RGB → grayscale
+        if x.ndim != 4:
+            raise RuntimeError(f"Unexpected tensor shape {x.shape}")
+    
+        # convert RGB to grayscale if needed
         if x.shape[1] == 3:
             x = x.mean(dim=1, keepdim=True)
     
-        # Ensure exactly one channel
+        # guarantee single channel
         if x.shape[1] != 1:
             x = x[:, :1]
     
-        # ---- Stream B ----
+        # ---- Phase stream ----
         with torch.cuda.amp.autocast(enabled=False):
             phase_emb = self.phase_pyramid(x.float())
     
         self.phase_cache["emb"] = phase_emb
     
-        # ---- Stream A ----
+        # ---- Spatial stream ----
         x = self.gabor(x)
         x = self.dw(x)
         x = self.act(self.bn(self.pw(x)))
