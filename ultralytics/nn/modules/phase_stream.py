@@ -342,24 +342,23 @@ class DualStreamStem(nn.Module):
         self.phase_cache: dict = {}
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-    # Ensure hologram stays single-channel
-    if x.shape[1] != 1:
-        x = x.mean(dim=1, keepdim=True)
-
-    # Stream B: compute phase embedding
-    with torch.cuda.amp.autocast(enabled=False):
-        phase_emb = self.phase_pyramid(x.float())
-
-    # Store embedding for PhaseGate layers
-    self.phase_cache["emb"] = phase_emb
-
-    # Stream A: spatial features
-    x = self.gabor(x)
-    x = self.dw(x)
-    x = self.act(self.bn(self.pw(x)))
-
-    return x
-
+        # Ensure hologram stays single channel
+        if x.shape[1] != 1:
+            x = x.mean(dim=1, keepdim=True)
+    
+        # Stream B: compute phase embedding
+        with torch.cuda.amp.autocast(enabled=False):
+            phase_emb = self.phase_pyramid(x.float())
+    
+        # Save embedding for PhaseGate modules
+        self.phase_cache["emb"] = phase_emb
+    
+        # Stream A: spatial features
+        x = self.gabor(x)
+        x = self.dw(x)
+        x = self.act(self.bn(self.pw(x)))
+    
+        return x
 
 # ── OrdinalMorphLoss ──────────────────────────────────────────────────────────
 
