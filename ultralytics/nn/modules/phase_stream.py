@@ -93,18 +93,21 @@ class GaborPyramid(nn.Module):
         feat = F.conv2d(x, W, padding=half)
 
         return feat.mean(dim=(-2, -1))
-
     def forward(self, x):
-
+    
         descriptors = []
-
+    
         for params in self.band_params:
             descriptors.append(self._gabor_response(x, params))
-
+    
         concat = torch.cat(descriptors, dim=1)
-
+    
+        # AMP FIX (critical)
+        proj_dtype = self.proj[0].weight.dtype
+        if concat.dtype != proj_dtype:
+            concat = concat.to(proj_dtype)
+    
         return self.proj(concat)
-
 
 # ─────────────────────────────────────────────────────────────
 # Phase Gate
