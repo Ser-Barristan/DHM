@@ -29,12 +29,13 @@ class GaborPyramid(nn.Module):
         band_dims = []
 
         for band_freqs in self.BANDS:
+
             n_f = len(band_freqs)
             n_gabor = n_f * n_orient
             band_dim = n_gabor
 
-            freq_init = torch.tensor(band_freqs).repeat(n_orient)
-            theta_init = torch.linspace(0., math.pi, n_orient + 1)[:-1].repeat_interleave(n_f)
+            freq_init = torch.tensor(band_freqs, dtype=torch.float32).repeat(n_orient)
+            theta_init = torch.linspace(0., math.pi, n_orient + 1, dtype=torch.float32)[:-1].repeat_interleave(n_f)
 
             params = nn.ParameterDict({
                 "frequencies": nn.Parameter(freq_init),
@@ -61,8 +62,8 @@ class GaborPyramid(nn.Module):
         dev = x.device
 
         yy, xx = torch.meshgrid(
-            torch.arange(-half, half + 1, device=dev),
-            torch.arange(-half, half + 1, device=dev),
+            torch.arange(-half, half + 1, dtype=torch.float32, device=dev),
+            torch.arange(-half, half + 1, dtype=torch.float32, device=dev),
             indexing="ij",
         )
 
@@ -86,9 +87,11 @@ class GaborPyramid(nn.Module):
 
             kernels.append(gauss * carrier)
 
-        W = torch.stack(kernels).unsqueeze(1)
+        # 🔧 CRITICAL FIX (dtype match for AMP)
+        W = torch.stack(kernels).unsqueeze(1).to(dtype=x.dtype, device=x.device)
 
         feat = F.conv2d(x, W, padding=half)
+
         return feat.mean(dim=(-2, -1))
 
     def forward(self, x):
@@ -99,6 +102,7 @@ class GaborPyramid(nn.Module):
             descriptors.append(self._gabor_response(x, params))
 
         concat = torch.cat(descriptors, dim=1)
+
         return self.proj(concat)
 
 
@@ -135,7 +139,7 @@ class PhaseGate(nn.Module):
 
 
 # ─────────────────────────────────────────────────────────────
-# Dual Stream Stem  (FIXED)
+# Dual Stream Stem
 # ─────────────────────────────────────────────────────────────
 
 class DualStreamStem(nn.Module):
@@ -158,12 +162,10 @@ class DualStreamStem(nn.Module):
 
         self.dw = nn.Conv2d(mid, mid, 3, stride=2, padding=1, groups=mid, bias=False)
 
-        # convert to RGB-like channels so YOLO backbone works
+        # convert to 3 channels so YOLO backbone stays compatible
         self.pw = nn.Conv2d(mid, 3, 1, bias=False)
 
-        # BN must match pw output
         self.bn = nn.BatchNorm2d(3)
-
         self.act = nn.SiLU(inplace=True)
 
         self.phase_pyramid = GaborPyramid(1, phase_dim)
