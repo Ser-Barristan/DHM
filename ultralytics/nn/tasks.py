@@ -1758,12 +1758,15 @@ def parse_model(d, ch, verbose=True):
         elif m is torch.nn.BatchNorm2d:
             args = [ch[f]]
         elif m is SwinBackbone:
+            c1 = ch[f] if isinstance(f, int) else ch[-1]  # resolve c1 manually
             m_ = m(c1, *args)
-            c2 = m_.out_channels[-1]   # 768 for swin-t, 1024 for swin-b, etc.
-
+            c2 = m_.out_channels[-1]
+        
         elif m is SwinSelect:
-            c2 = args[0]               # channel count declared in YAML
+            c1 = ch[f] if isinstance(f, int) else ch[-1]  # same fix
+            c2 = args[0]
             m_ = m(c1, *args)
+        
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
         elif m in frozenset(
