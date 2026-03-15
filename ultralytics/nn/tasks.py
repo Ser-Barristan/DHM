@@ -1756,19 +1756,41 @@ def parse_model(d, ch, verbose=True):
         elif m is ResNetLayer:
             c2 = args[1] if args[3] else args[1] * 4
         elif m is torch.nn.BatchNorm2d:
-            args = [ch[f]]
+                    args = [ch[f]]
+
         elif m is SwinBackbone:
-            c1 = ch[f] if isinstance(f, int) else ch[-1]  # resolve c1 manually
+            c1 = ch[f] if isinstance(f, int) else ch[-1]
             m_ = m(c1, *args)
             c2 = m_.out_channels[-1]
-        
+            t = str(m)[8:-2].replace("__main__.", "")
+            m_.np = sum(x.numel() for x in m_.parameters())
+            m_.i, m_.f, m_.type = i, f, t
+            if verbose:
+                LOGGER.info(f"{i:>3}{str(f):>20}{n_:>3}{m_.np:10.0f}  {t:<45}{str(args):<30}")
+            save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)
+            layers.append(m_)
+            if i == 0:
+                ch = []
+            ch.append(c2)
+            continue
+
         elif m is SwinSelect:
-            c1 = ch[f] if isinstance(f, int) else ch[-1]  # same fix
+            c1 = ch[f] if isinstance(f, int) else ch[-1]
             c2 = args[0]
             m_ = m(c1, *args)
-        
+            t = str(m)[8:-2].replace("__main__.", "")
+            m_.np = sum(x.numel() for x in m_.parameters())
+            m_.i, m_.f, m_.type = i, f, t
+            if verbose:
+                LOGGER.info(f"{i:>3}{str(f):>20}{n_:>3}{m_.np:10.0f}  {t:<45}{str(args):<30}")
+            save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)
+            layers.append(m_)
+            ch.append(c2)
+            continue
+
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
+        # ... rest unchanged
         elif m in frozenset(
             {Detect, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, HoloDetect, v10Detect}
         ):
