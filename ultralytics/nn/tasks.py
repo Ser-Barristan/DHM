@@ -1758,8 +1758,8 @@ def parse_model(d, ch, verbose=True):
         elif m is torch.nn.BatchNorm2d:
             args = [ch[f]]
         elif m is SwinBackbone:
-        m_ = m(c1, *args)
-        c2 = m_.out_channels[-1]   # 768 for swin-t, 1024 for swin-b, etc.
+            m_ = m(c1, *args)
+            c2 = m_.out_channels[-1]   # 768 for swin-t, 1024 for swin-b, etc.
 
         elif m is SwinSelect:
             c2 = args[0]               # channel count declared in YAML
