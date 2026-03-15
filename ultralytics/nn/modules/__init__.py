@@ -17,6 +17,13 @@ Examples:
     >>> os.system(f"onnxslim {f} {f} && open {f}")  # pip install onnxslim
 """
 from .HoloDetect import HoloDetect
+from .swin_backbone import (
+    SwinPatchEmbed,
+    SwinPatchMerge,
+    SwinStage,
+    SwinBackbone,
+    SwinSelect,
+)
 # ── HoloYOLO additions ────────────────────────────────────────────────────────
 from .gabor import GaborStem
 from .radial_attn import AnnularPool, HoloSPPF
@@ -198,4 +205,9 @@ __all__ = (
     "TorchVision",
     "Index",
     "A2C2f",
+    "SwinPatchEmbed",
+    "SwinPatchMerge",
+    "SwinStage",
+    "SwinBackbone",
+    "SwinSelect",
 )
