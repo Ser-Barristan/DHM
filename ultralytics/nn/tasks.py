@@ -34,6 +34,8 @@ globals()['PhaseGate'] = PhaseGate
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
+    SwinBackbone,   # ADD
+    SwinSelect,     # ADD
     GaborStem,
     HoloSPPF,
     DeformC2f,
@@ -1755,6 +1757,13 @@ def parse_model(d, ch, verbose=True):
             c2 = args[1] if args[3] else args[1] * 4
         elif m is torch.nn.BatchNorm2d:
             args = [ch[f]]
+        elif m is SwinBackbone:
+        m_ = m(c1, *args)
+        c2 = m_.out_channels[-1]   # 768 for swin-t, 1024 for swin-b, etc.
+
+        elif m is SwinSelect:
+            c2 = args[0]               # channel count declared in YAML
+            m_ = m(c1, *args)
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
         elif m in frozenset(
