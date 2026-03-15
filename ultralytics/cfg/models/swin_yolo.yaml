@@ -1,0 +1,68 @@
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║  swin_yolo.yaml                                                           ║
+# ║  Pure Swin Transformer backbone + Conv 1×1 projections + 4 Detect heads  ║
+# ║  No FPN / PAN / neck of any kind — only Conv where strictly required.    ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+#
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │  Full layer map  (Swin-T, embed=96)                                      │
+# ├────┬──────┬───────────────┬──────────────────────┬──────────────────────┤
+# │ i  │ from │ module        │ args                 │ output               │
+# ├────┼──────┼───────────────┼──────────────────────┼──────────────────────┤
+# │ 0  │  -1  │ SwinBackbone  │ [96,[2,2,6,2],7]     │ list[P2,P3,P4,P5]   │
+# │ 1  │   0  │ SwinSelect    │ [96,  0]             │ P2  96ch  H/4        │
+# │ 2  │   0  │ SwinSelect    │ [192, 1]             │ P3 192ch  H/8        │
+# │ 3  │   0  │ SwinSelect    │ [384, 2]             │ P4 384ch  H/16       │
+# │ 4  │   0  │ SwinSelect    │ [768, 3]             │ P5 768ch  H/32       │
+# ├────┼──────┼───────────────┼──────────────────────┼──────────────────────┤
+# │ 5  │   1  │ Conv          │ [128, 1, 1]          │ P2-proj 128ch        │
+# │ 6  │   2  │ Conv          │ [256, 1, 1]          │ P3-proj 256ch        │
+# │ 7  │   3  │ Conv          │ [256, 1, 1]          │ P4-proj 256ch        │
+# │ 8  │   4  │ Conv          │ [512, 1, 1]          │ P5-proj 512ch        │
+# ├────┼──────┼───────────────┼──────────────────────┼──────────────────────┤
+# │ 9  │5,6,7,8│ Detect       │ [nc]                 │ 4 prediction heads   │
+# └────┴──────┴───────────────┴──────────────────────┴──────────────────────┘
+#
+# To switch backbone variant update layer 0 args AND the SwinSelect channels:
+#
+#   Swin-T : embed=96,  depths=[2,2, 6,2]  → ch: [ 96, 192, 384,  768]
+#   Swin-S : embed=96,  depths=[2,2,18,2]  → ch: [ 96, 192, 384,  768]
+#   Swin-B : embed=128, depths=[2,2,18,2]  → ch: [128, 256, 512, 1024]
+#   Swin-L : embed=192, depths=[2,2,18,2]  → ch: [192, 384, 768, 1536]
+#
+# See INTEGRATION.md for variant-specific YAML snippets.
+
+nc: 80   # number of classes — override at train time: yolo train data=xxx.yaml nc=20
+
+# ── Backbone ─────────────────────────────────────────────────────────────────
+backbone:
+  # [from, repeats, module, args]
+
+  # ── Layer 0: full backbone (returns list of 4 tensors) ────────────────────
+  # args: [embed_dim, depths, window_size]
+  # parse_model sets c2 = out_channels[-1] = 8*embed = 768
+  - [-1, 1, SwinBackbone, [96, [2, 2, 6, 2], 7]]        # 0  list[P2..P5]
+
+  # ── Layers 1-4: unpack individual scales from the list ────────────────────
+  # args: [out_channels, stage_index]
+  # 'from=0' means these layers always read from layer 0 (the backbone list)
+  - [0, 1, SwinSelect, [96,  0]]                         # 1  P2   96ch  H/4
+  - [0, 1, SwinSelect, [192, 1]]                         # 2  P3  192ch  H/8
+  - [0, 1, SwinSelect, [384, 2]]                         # 3  P4  384ch  H/16
+  - [0, 1, SwinSelect, [768, 3]]                         # 4  P5  768ch  H/32
+
+# ── Head ──────────────────────────────────────────────────────────────────────
+head:
+  # [from, repeats, module, args]
+
+  # Conv 1×1 projections — channel alignment only, zero spatial mixing.
+  # These are the ONLY convolutions between backbone and detect heads.
+  # args to Conv: [out_channels, kernel_size, stride]
+  - [1, 1, Conv, [128, 1, 1]]                            # 5  P2 proj   96→128
+  - [2, 1, Conv, [256, 1, 1]]                            # 6  P3 proj  192→256
+  - [3, 1, Conv, [256, 1, 1]]                            # 7  P4 proj  384→256
+  - [4, 1, Conv, [512, 1, 1]]                            # 8  P5 proj  768→512
+
+  # 4-scale Detect head
+  # reads layers [5, 6, 7, 8] → [P2-proj, P3-proj, P4-proj, P5-proj]
+  - [[5, 6, 7, 8], 1, Detect, [nc]]                      # 9  Detect
