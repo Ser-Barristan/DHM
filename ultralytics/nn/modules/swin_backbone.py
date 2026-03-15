@@ -22,7 +22,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # Your existing block — we call it, never rewrite it
-from .swin_transformer import SwinTransformerBlock
+from .TF import SwinTransformerBlock
 from .conv import Conv
 
 __all__ = [
