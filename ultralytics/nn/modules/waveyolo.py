@@ -172,21 +172,12 @@ class WaveFPN(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 
 class PSARadial(nn.Module):
-    """Polar-position-aware multi-head self-attention.
-
-    Encodes each spatial position as (r, θ) instead of Cartesian (x, y).
-    This gives the attention map an explicit radial symmetry inductive bias,
-    helping it attend to ring structures regardless of orientation.
-
-    Args:
-        c         : channel dim (must equal backbone output channels)
-        num_heads : MHA heads (default 8)
-        drop      : attention dropout (default 0.0)
-    """
-
-    def __init__(self, c: int, num_heads: int = 8, drop: float = 0.0):
+    def __init__(self, c1, c2=None, num_heads=8, drop=0.0):
         super().__init__()
-        self.c         = c
+        # Handle base_modules calling with (c1, c2, ...)
+        c = c2 if (c2 is not None and isinstance(c2, int) and c2 > 8) else c1
+        self.c = c
+        # rest of init unchanged, replace all self.c references
         self.attn      = nn.MultiheadAttention(c, num_heads,
                                                dropout=drop,
                                                batch_first=True)
