@@ -319,7 +319,6 @@ class BaseTrainer:
             metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix="val")
             self.metrics = dict(zip(metric_keys, [0] * len(metric_keys)))
             self.ema = ModelEMA(self.model)
-            self.ema.enabled = False
             if self.args.plots:
                 self.plot_training_labels()
 
@@ -453,8 +452,8 @@ class BaseTrainer:
             self.run_callbacks("on_train_epoch_end")
             if RANK in {-1, 0}:
                 final_epoch = epoch + 1 >= self.epochs
-            if self.ema and getattr(self.ema, "enabled", True):
-                self.ema.update_attr(self.model, include=["yaml","nc","args","names","stride","class_weights"])
+                self.ema.update_attr(self.model, include=["yaml", "nc", "args", "names", "stride", "class_weights"])
+
                 # Validation
                 if self.args.val or final_epoch or self.stopper.possible_stop or self.stop:
                     self.metrics, self.fitness = self.validate()
