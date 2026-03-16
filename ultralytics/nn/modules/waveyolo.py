@@ -15,43 +15,44 @@ from .conv import Conv  # ultralytics built-in
 # 1. Annular depthwise conv  (ring-shaped kernel mask)
 # ──────────────────────────────────────────────────────────────────────────────
 
+"""
+REPLACE the AnnularDWConv class in ultralytics/nn/modules/waveyolo.py
+with this version.  It accepts BOTH calling conventions:
+  - AnnularDWConv(c, k, r_inner, r_outer)          ← direct
+  - AnnularDWConv(c1, c2, k, r_inner, r_outer)     ← called via base_modules
+"""
+
 class AnnularDWConv(nn.Module):
-    """Depthwise conv with a fixed annular kernel mask.
-
-    Forces filters to respond to ring/halo edge patterns rather than
-    solid blobs.  The mask is re-parameterisable at inference:
-        w_eff = weight * mask   (done in forward; fuse for export)
-
-    Args:
-        c        : number of channels
-        k        : kernel size (odd; default 7)
-        r_inner  : inner radius of the ring mask (default 2)
-        r_outer  : outer radius of the ring mask (default 3)
-    """
-
-    def __init__(self, c: int, k: int = 7, r_inner: int = 2, r_outer: int = 3):
+    def __init__(self, c1, c2=None, k=7, r_inner=2, r_outer=3):
         super().__init__()
+        # Handle both (c, k, r_inner, r_outer) and (c1, c2, k, r_inner, r_outer)
+        if c2 is None:
+            # Called as AnnularDWConv(c, k, r_inner, r_outer)
+            c = c1
+        elif isinstance(c2, int) and c2 > 10:
+            # c2 looks like a channel count → base_modules called us with (c1, c2, ...)
+            c = c2
+        else:
+            # c2 is actually k (small int) → called as AnnularDWConv(c, k, ...)
+            c = c1
+            k, r_inner, r_outer = c2, k, r_inner
+
         assert k % 2 == 1, "kernel size must be odd"
         self.padding = k // 2
-        self.groups  = c
-        self.conv    = nn.Conv2d(c, c, k, padding=k // 2,
-                                 groups=c, bias=False)
+        self.conv    = nn.Conv2d(c, c, k, padding=k // 2, groups=c, bias=False)
         mask = self._make_ring_mask(k, r_inner, r_outer)
         self.register_buffer('mask', mask.view(1, 1, k, k))
 
     @staticmethod
-    def _make_ring_mask(k: int, r_inner: float, r_outer: float) -> torch.Tensor:
+    def _make_ring_mask(k, r_inner, r_outer):
         cy = cx = k // 2
         y, x = torch.meshgrid(torch.arange(k), torch.arange(k), indexing='ij')
         dist = ((x - cx).float() ** 2 + (y - cy).float() ** 2).sqrt()
         return ((dist >= r_inner) & (dist <= r_outer)).float()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        w = self.conv.weight * self.mask   # masked weights
-        return F.conv2d(x, w, stride=1,
-                        padding=self.padding, groups=x.shape[1])
-
-
+    def forward(self, x):
+        w = self.conv.weight * self.mask
+        return F.conv2d(x, w, stride=1, padding=self.padding, groups=x.shape[1])
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. C2f-Ring  (drop-in for C2f; adds annular branch)
 # ──────────────────────────────────────────────────────────────────────────────
