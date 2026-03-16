@@ -24,6 +24,13 @@ from .swin_backbone import (
     SwinBackbone,
     SwinSelect,
 )
+from .waveyolo import (
+    AnnularDWConv,
+    C2f_Ring,
+    HaarWavelet2D,
+    WaveFPN,
+    PSARadial,
+)
 # ── HoloYOLO additions ────────────────────────────────────────────────────────
 from .gabor import GaborStem
 from .radial_attn import AnnularPool, HoloSPPF
@@ -210,4 +217,10 @@ __all__ = (
     "SwinStage",
     "SwinBackbone",
     "SwinSelect",
+    'AnnularDWConv',
+    'C2f_Ring',
+    'HaarWavelet2D',
+    'WaveFPN',
+    'PSARadial',
+)
 )
