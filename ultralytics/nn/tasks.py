@@ -36,7 +36,7 @@ globals()['DeformC2f'] = DeformC2f
 globals()['HoloDetect'] = HoloDetect
 globals()['DualStreamStem'] = DualStreamStem
 globals()['PhaseGate'] = PhaseGate
-
+from ultralytics.nn.modules.conv import CBAM
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
@@ -1645,6 +1645,7 @@ def parse_model(d, ch, verbose=True):
     base_modules = frozenset(
         {
             Classify,
+            CBAM,
             C2f_Ring,     # ADD
             Conv,
             ConvTranspose,
