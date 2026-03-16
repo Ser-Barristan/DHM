@@ -1818,21 +1818,30 @@ def parse_model(d, ch, verbose=True):
             args = [c2, ch[f]] # GaborStem(out_channels, in_channels)
         elif m is CBFuse:
             c2 = ch[f[-1]]
-        elif m is AnnularDWConv:
-             c2 = ch[-1]             # channels unchanged
-             args = [c2, *args]      # prepend c only (not c1 AND c2)
+        elif m.__name__ == 'AnnularDWConv':
+            c2 = ch[-1]
+            args = [c2, *args]
 
-        elif m is PSARadial:
-            c2 = ch[-1]             # channels unchanged
-            args = [c2, *args]      # prepend c
+        elif m.__name__ == 'PSARadial':
+            c2 = ch[-1]
+            args = [c2, *args]
 
-        elif m is WaveFPN:
+        elif m.__name__ == 'WaveFPN':
             c2 = make_divisible(min(args[0], max_channels) * width, 8)
             args = [c2]
 
-        elif m is HaarWavelet2D:
+        elif m.__name__ == 'HaarWavelet2D':
             c2 = ch[-1]
-            # no args needed  
+
+        elif m.__name__ == 'C2f_Ring':
+            # already handled via base_modules if imported correctly
+            # but add fallback here in case of same identity mismatch
+            c1, c2 = ch[-1], args[0]
+            if c2 != nc:
+                c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args = [c1, c2, *args[1:]]
+            args.insert(2, n)
+            n = 1
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]
             c1 = ch[f]
