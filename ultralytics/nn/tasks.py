@@ -12,7 +12,13 @@ import torch.nn as nn
 from ultralytics.nn.modules.conv import simam
 from ultralytics.nn.modules.TF import SwinTransformer
 globals()['SwinTransformer'] = SwinTransformer
-
+from ultralytics.nn.modules.waveyolo import (
+    AnnularDWConv,
+    C2f_Ring,
+    HaarWavelet2D,
+    WaveFPN,
+    PSARadial,
+)
 globals()['simam'] = simam
 from ultralytics.nn.modules.fhnet_modules import DSC2f, SimAM, FringeBlock
 globals()['DSC2f'] = DSC2f
@@ -1639,6 +1645,8 @@ def parse_model(d, ch, verbose=True):
     base_modules = frozenset(
         {
             Classify,
+            C2f_Ring,     # ADD
+            PSARadial,
             Conv,
             ConvTranspose,
             GhostConv,
@@ -1682,6 +1690,7 @@ def parse_model(d, ch, verbose=True):
     repeat_modules = frozenset(  # modules with 'repeat' arguments
         {
             BottleneckCSP,
+            C2f_Ring,
             C1,
             SwinTransformer,
             C2,
@@ -1810,6 +1819,16 @@ def parse_model(d, ch, verbose=True):
             args = [c2, ch[f]] # GaborStem(out_channels, in_channels)
         elif m is CBFuse:
             c2 = ch[f[-1]]
+        elif m is AnnularDWConv:
+            c2 = ch[f]              # channels unchanged
+            # args: [k, r_inner, r_outer] — prepend c
+            args = [c2, *args]
+        elif m is WaveFPN:
+            # Two inputs [coarse, fine]; output channels = args[0]
+            c2 = make_divisible(min(args[0], max_channels) * width, 8)
+            args = [c2]
+        elif m is HaarWavelet2D:
+            c2 = ch[f]   
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]
             c1 = ch[f]
