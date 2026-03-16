@@ -1,0 +1,70 @@
+# ════════════════════════════════════════════════════════════════════════════
+# MaxMAP-RBC  v2  —  3-class RBC (hypoxia / normoxia / healthy)
+# ultralytics/cfg/models/v8/maxmap_rbc.yaml
+#
+# Modules and their signatures (confirmed from source):
+#
+#   simam(e_lambda)              → NO channel arg  → standalone layer, c2=ch[f]
+#   CBAM(c1, kernel_size=7)      → channel-aware   → in base_modules
+#   SwinTransformer(c1,c2,heads,layers,window) → in base_modules+repeat_modules
+#   C3TR(c1,c2,n,shortcut)       → in base_modules+repeat_modules
+#   C2f(c1,c2,n,shortcut)        → standard
+#   SPPF(c1,c2,k)                → standard
+#
+# Architecture:
+#   P3: C2f → CBAM  (channel+spatial recalibration for fine RBC texture)
+#   P4: C3TR → simam (transformer context + parameter-free spatial attn)
+#   P5: SwinTransformer → CBAM (global window attention + full recalibration)
+#   Neck: alternating simam/CBAM gates on every skip connection
+# ════════════════════════════════════════════════════════════════════════════
+
+nc: 3
+scales:
+  m: [0.67, 0.75, 768]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.25, 512]
+
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv,            [64,   3, 2]]       #  0  P1/2
+  - [-1, 1, Conv,            [128,  3, 2]]       #  1  P2/4
+  - [-1, 3, C2f,             [128,  True]]       #  2
+
+  - [-1, 1, Conv,            [256,  3, 2]]       #  3  P3/8
+  - [-1, 6, C2f,             [256,  True]]       #  4
+  - [-1, 1, CBAM,            [256]]              #  5  ← P3  channel+spatial attn
+
+  - [-1, 1, Conv,            [512,  3, 2]]       #  6  P4/16
+  - [-1, 6, C3TR,            [512,  True]]       #  7  transformer bottleneck
+  - [-1, 1, simam,           []]                 #  8  ← P4  param-free attn
+
+  - [-1, 1, Conv,            [1024, 3, 2]]       #  9  P5/32
+  - [-1, 3, SwinTransformer, [1024, 8, 2, 7]]    # 10  global window attn
+  - [-1, 1, CBAM,            [1024]]             # 11
+  - [-1, 1, SPPF,            [1024, 5]]          # 12  ← P5
+
+head:
+  # ── top-down ──────────────────────────────────────────────────────────────
+  - [-1,       1, nn.Upsample, [None, 2, 'nearest']]  # 13
+  - [[-1, 8],  1, Concat,      [1]]                   # 14  cat P4  → 1536
+  - [-1,       3, C2f,         [512,  False]]          # 15
+  - [-1,       1, simam,       []]                     # 16  ← N4
+
+  - [-1,       1, nn.Upsample, [None, 2, 'nearest']]  # 17
+  - [[-1, 5],  1, Concat,      [1]]                   # 18  cat P3  → 768
+  - [-1,       3, C2f,         [256,  False]]          # 19
+  - [-1,       1, CBAM,        [256]]                  # 20  ← N3  (P3 out)
+
+  # ── bottom-up ─────────────────────────────────────────────────────────────
+  - [-1,        1, Conv,       [256,  3, 2]]           # 21
+  - [[-1, 16],  1, Concat,     [1]]                    # 22  cat N4  → 768
+  - [-1,        3, C3TR,       [512,  False]]          # 23  transformer in PAN
+  - [-1,        1, simam,      []]                     # 24  ← N4  (P4 out)
+
+  - [-1,        1, Conv,       [512,  3, 2]]           # 25
+  - [[-1, 12],  1, Concat,     [1]]                    # 26  cat P5  → 1536
+  - [-1,        3, C2f,        [1024, False]]          # 27
+  - [-1,        1, CBAM,       [1024]]                 # 28  ← N5  (P5 out)
+
+  # ── detect ────────────────────────────────────────────────────────────────
+  - [[20, 24, 28], 1, Detect,  [nc]]                   # 29
