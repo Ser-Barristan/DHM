@@ -1645,7 +1645,6 @@ def parse_model(d, ch, verbose=True):
     base_modules = frozenset(
         {
             Classify,
-            CBAM,
             C2f_Ring,     # ADD
             Conv,
             ConvTranspose,
@@ -1750,6 +1749,12 @@ def parse_model(d, ch, verbose=True):
         
         elif m is AIFI:
             args = [ch[f], *args]
+        elif m is simam:
+            c2 = ch[f]
+
+        elif m is CBAM:
+            c2 = ch[f]          # channels unchanged
+            args = [c2]         # only pass c1; kernel_size defaults to 7
         elif m is HoloSPPF: # HoloYOLO fix
             c1 = ch[f]
             c2 = int(args[0]) # out_channels
