@@ -1646,7 +1646,6 @@ def parse_model(d, ch, verbose=True):
         {
             Classify,
             C2f_Ring,     # ADD
-            PSARadial,
             Conv,
             ConvTranspose,
             GhostConv,
@@ -1820,15 +1819,20 @@ def parse_model(d, ch, verbose=True):
         elif m is CBFuse:
             c2 = ch[f[-1]]
         elif m is AnnularDWConv:
-            c2 = ch[f]              # channels unchanged
-            # args: [k, r_inner, r_outer] — prepend c
-            args = [c2, *args]
+             c2 = ch[-1]             # channels unchanged
+             args = [c2, *args]      # prepend c only (not c1 AND c2)
+
+        elif m is PSARadial:
+            c2 = ch[-1]             # channels unchanged
+            args = [c2, *args]      # prepend c
+
         elif m is WaveFPN:
-            # Two inputs [coarse, fine]; output channels = args[0]
             c2 = make_divisible(min(args[0], max_channels) * width, 8)
             args = [c2]
+
         elif m is HaarWavelet2D:
-            c2 = ch[f]   
+            c2 = ch[-1]
+            # no args needed  
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]
             c1 = ch[f]
