@@ -223,4 +223,3 @@ __all__ = (
     'WaveFPN',
     'PSARadial',
 )
-)
