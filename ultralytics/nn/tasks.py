@@ -9,7 +9,11 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-
+# Add this line to the existing imports in ultralytics/nn/tasks.py
+from ultralytics.nn.modules.holography import (   # noqa: F401
+    SwinTBackbone, PANetNeck, FiLMPhaseDecoder, FiLMLayer,
+    ConvBNSiLU, C2fBlock
+)
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
