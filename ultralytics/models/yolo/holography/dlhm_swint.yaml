@@ -1,23 +1,20 @@
 # ultralytics/cfg/models/holography/dlhm_swint.yaml
-# Physics-Aware SwinT-YOLO for DLHM Phase Reconstruction
-# Usage: trainer = HolographyTrainer(overrides={'model': 'path/to/dlhm_swint.yaml', ...})
+# Pass this path to HolographyTrainer via overrides['model']
 
 task: holography
 
-# SwinT backbone config
+# Backbone
 embed_dim: 96
 depths: [2, 2, 6, 2]
 num_heads: [3, 6, 12, 24]
 window_size: 8
-physics_dim: 4        # wavelength, L, z, pixel_size (all normalized)
+physics_dim: 4
 
 # Loss weights
-loss_alpha: 1.0       # L1
-loss_beta: 1.0        # 1 - SSIM
-loss_gamma: 0.5       # Gradient
-loss_delta: 0.5       # Fourier
+loss_alpha: 1.0
+loss_beta:  1.0
+loss_gamma: 0.5
+loss_delta: 0.5
 
-# Data
-base_dir: "/data/DLHM_Data"     # CHANGE THIS to your local dataset root
-seed: 42
-imgsz: 1024
+# nc is required by BaseTrainer even for non-detection tasks
+nc: 1
