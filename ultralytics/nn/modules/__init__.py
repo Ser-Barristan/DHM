@@ -16,7 +16,8 @@ Examples:
     >>> torch.onnx.export(m, x, f)
     >>> subprocess.run(f"onnxslim {f} {f} && open {f}", shell=True, check=True)  # pip install onnxslim
 """
-
+from .holography import (SwinTBackbone, PANetNeck, FiLMPhaseDecoder,
+                          FiLM, CBS, C2f as C2fHolo)
 from .block import (
     C1,
     C2,
