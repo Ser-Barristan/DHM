@@ -163,6 +163,23 @@ class HolographyTrainer(BaseTrainer):
                     for k, v in zip(keys, loss_items)}
         return keys
 
+    # Add this to HolographyTrainer in train.py:
+    def _setup_train(self, world_size):
+        """Call parent setup then monkey-patch the model's __call__ to inject physics."""
+        super()._setup_train(world_size)
+        # Wrap model so BaseTrainer's `self.model(batch)` works correctly.
+        # BaseTrainer._do_train passes the whole batch dict to model; we intercept.
+        _orig_call = self.model.__class__.forward
+
+        def _patched_forward(m, x, physics=None):
+            # If called with a dict (from BaseTrainer._do_train), unpack it
+            if isinstance(x, dict):
+                physics = x.get('physics', None)
+                x = x['raw']
+            return _orig_call(m, x, physics)
+
+        self.model.__class__.forward = _patched_forward
+
     def progress_string(self):
         """Custom tqdm header matching label_loss_items keys."""
         return (('\n' + '%11s' * (4 + len(self.loss_names))) %
