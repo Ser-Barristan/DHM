@@ -2071,3 +2071,667 @@ class RealNVP(nn.Module):
             self.float()
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
+
+
+
+
+
+"""
+DHM custom blocks for ultralytics/nn/modules/block.py
+======================================================
+INSTRUCTION: Copy everything below the dashed line and APPEND it to the
+bottom of  ultralytics/nn/modules/block.py  in your repo.
+
+Blocks defined here:
+  - RSFiLMGenerator        : Rayleigh-Sommerfeld physics -> (gamma, beta) per stage
+  - PatchEmbedDHM          : Conv2d patch embedding (replaces stem convolutions)
+  - PatchMergingDHM        : 2x spatial downsampling via pixel-shuffle concat
+  - WindowAttentionDHM     : Relative-position-bias window attention
+  - SwinBlockDHM           : W-MSA + SW-MSA pair with FiLM injection
+  - MWSwinStageDHM         : One backbone stage: fixed window_size, depth blocks
+  - BiFPNLayerDHM          : One bidirectional weighted-fusion PANet layer
+  - ASPPModuleDHM          : Atrous Spatial Pyramid Pooling
+  - LapPyramidDecoderDHM   : Laplacian sub-band residual decoder
+"""
+
+# ── standard imports (already present in block.py, listed for clarity) ──────
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# ════════════════════════════════════════════════════════════════════════════
+#  RS-FiLM PHYSICS ENCODER
+# ════════════════════════════════════════════════════════════════════════════
+
+def _rs_physics_features(wavelength, L_value, z_value,
+                          pixel_size: float = 3.8e-3,
+                          N_pix: int = 768):
+    """
+    Compute 8-dim Rayleigh-Sommerfeld physics features.
+
+    Parameters (all tensors on same device as model)
+    ----------
+    wavelength : (B,)  μm
+    L_value    : (B,)  mm  — camera-to-source distance
+    z_value    : (B,)  mm  — sample-to-source distance
+    pixel_size : float μm  — detector pixel pitch (default 3.8 μm)
+    N_pix      : int       — image side length in pixels (default 768)
+
+    Returns
+    -------
+    feat : (B, 8)  float32
+    """
+    lam    = wavelength                         # μm
+    z      = z_value  * 1e3                    # mm → μm
+    L      = L_value  * 1e3                    # mm → μm
+    px     = pixel_size                         # μm  scalar
+    k      = 2.0 * math.pi / lam              # (B,) wavenumber 1/μm
+
+    # Half-width of hologram aperture
+    W_half = (N_pix * px) * 0.5               # scalar μm  (=1459.2 μm)
+
+    # Maximum off-axis distance (corner pixel)
+    r_max  = torch.sqrt(
+        torch.full_like(z, W_half ** 2) + z ** 2
+    )                                          # (B,) μm
+
+    # 1. RS obliquity factor: cos(θ_max) = z / r_max  ∈ (0,1]
+    obliquity  = z / r_max
+
+    # 2. Phase at corner: k * r_max  (radians, large)
+    phi_corner = k * r_max
+
+    # 3. On-axis phase: k * z
+    phi_onaxis = k * z
+
+    # 4. Near/far-field ratio: z / λ  (log-compressed)
+    z_over_lam = z / lam
+
+    # 5. Magnification: M = L / z
+    mag = L / z.clamp(min=1e-3)
+
+    # 6. Object-plane effective pixel: px / M  (μm)
+    px_obj = torch.full_like(lam, px) / mag.clamp(min=1e-3)
+
+    # 7. Phase wrap count: φ_corner / 2π
+    wrap_count = phi_corner / (2.0 * math.pi)
+
+    # 8. Phase adequacy: φ_corner / π
+    phase_adequacy = phi_corner / math.pi
+
+    feat = torch.stack([
+        obliquity,                                   # ∈ (0,1]
+        torch.log1p(phi_corner.clamp(min=0)),        # ≥ 0
+        torch.log1p(phi_onaxis.clamp(min=0)),        # ≥ 0
+        torch.log1p(z_over_lam),                     # ≥ 0
+        torch.log1p(mag.clamp(max=1e4)),             # ≥ 0
+        torch.log1p(px_obj.clamp(max=1e4)),          # ≥ 0
+        torch.sin(phi_onaxis % (2 * math.pi)),       # cyclic cue
+        torch.cos(phi_onaxis % (2 * math.pi)),       # cyclic cue
+    ], dim=-1)                                       # (B, 8)
+    return feat
+
+
+class RSFiLMGenerator(nn.Module):
+    """
+    Maps RS physics features → per-stage (gamma, beta) for FiLM modulation.
+
+    Args
+    ----
+    physics_dim  : int   input feature dimension (8 RS features)
+    hidden_dim   : int   shared MLP hidden size
+    stage_dims   : list  channel count at each backbone stage to be modulated
+    pixel_size   : float detector pixel pitch in μm
+    n_pix        : int   image side in pixels
+    """
+    def __init__(self, physics_dim: int = 8, hidden_dim: int = 128,
+                 stage_dims: list = None,
+                 pixel_size: float = 3.8e-3, n_pix: int = 768):
+        super().__init__()
+        self.pixel_size = pixel_size
+        self.n_pix      = n_pix
+
+        self.shared = nn.Sequential(
+            nn.Linear(physics_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+        )
+        # separate gamma/beta head per stage
+        self.heads = nn.ModuleList([
+            nn.Linear(hidden_dim, 2 * d) for d in stage_dims
+        ])
+
+    def forward(self, wavelength, L_value, z_value):
+        """
+        Returns list of (gamma, beta) tensors, one per stage.
+        gamma, beta: (B, stage_dim)
+        """
+        feat = _rs_physics_features(
+            wavelength, L_value, z_value,
+            self.pixel_size, self.n_pix
+        )                                    # (B, 8)
+        h = self.shared(feat)                # (B, hidden)
+        out = []
+        for head in self.heads:
+            gb = head(h)
+            gamma, beta = gb.chunk(2, dim=-1)
+            out.append((gamma, beta))
+        return out                           # list[(B,C), (B,C)] × n_stages
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PATCH EMBEDDING
+# ════════════════════════════════════════════════════════════════════════════
+
+class PatchEmbedDHM(nn.Module):
+    """
+    Conv2d-based patch embedding: image → token sequence.
+
+    Args
+    ----
+    in_chans    : int  input channels (1 for grayscale hologram)
+    embed_dim   : int  token dimension C
+    patch_size  : int  downsampling factor (default 4 → 768→192)
+    """
+    def __init__(self, in_chans: int = 1, embed_dim: int = 96,
+                 patch_size: int = 4):
+        super().__init__()
+        self.patch_size = patch_size
+        self.proj = nn.Conv2d(in_chans, embed_dim,
+                              kernel_size=patch_size, stride=patch_size)
+        self.norm = nn.LayerNorm(embed_dim)
+
+    def forward(self, x):
+        # x: (B, C_in, H, W)
+        x = self.proj(x)                           # (B, C, H/ps, W/ps)
+        B, C, Hp, Wp = x.shape
+        x = x.flatten(2).transpose(1, 2)           # (B, Hp*Wp, C)
+        x = self.norm(x)
+        return x, Hp, Wp
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PATCH MERGING  (2× downsampling inside the backbone)
+# ════════════════════════════════════════════════════════════════════════════
+
+class PatchMergingDHM(nn.Module):
+    """Pixel-shuffle concatenation → linear reduction: (B,H*W,C) → (B,H/2*W/2,2C)."""
+    def __init__(self, dim: int):
+        super().__init__()
+        self.norm      = nn.LayerNorm(4 * dim)
+        self.reduction = nn.Linear(4 * dim, 2 * dim, bias=False)
+
+    def forward(self, x, H, W):
+        B, _, C = x.shape
+        x  = x.view(B, H, W, C)
+        x0 = x[:, 0::2, 0::2, :]
+        x1 = x[:, 1::2, 0::2, :]
+        x2 = x[:, 0::2, 1::2, :]
+        x3 = x[:, 1::2, 1::2, :]
+        x  = torch.cat([x0, x1, x2, x3], dim=-1)  # (B, H/2, W/2, 4C)
+        x  = x.view(B, -1, 4 * C)
+        x  = self.norm(x)
+        x  = self.reduction(x)                     # (B, H/2*W/2, 2C)
+        return x, H // 2, W // 2
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  WINDOW ATTENTION
+# ════════════════════════════════════════════════════════════════════════════
+
+def _window_partition(x, ws):
+    """(B,H,W,C) → (B*nW, ws, ws, C)"""
+    B, H, W, C = x.shape
+    x = x.view(B, H // ws, ws, W // ws, ws, C)
+    return x.permute(0,1,3,2,4,5).contiguous().view(-1, ws, ws, C)
+
+
+def _window_reverse(windows, ws, H, W):
+    """(B*nW, ws, ws, C) → (B, H, W, C)"""
+    B = int(windows.shape[0] / (H // ws * W // ws))
+    x = windows.view(B, H // ws, W // ws, ws, ws, -1)
+    return x.permute(0,1,3,2,4,5).contiguous().view(B, H, W, -1)
+
+
+class WindowAttentionDHM(nn.Module):
+    def __init__(self, dim, window_size, num_heads,
+                 qkv_bias=True, attn_drop=0., proj_drop=0.):
+        super().__init__()
+        self.ws        = window_size
+        self.num_heads = num_heads
+        self.scale     = (dim // num_heads) ** -0.5
+
+        # relative position bias table
+        self.rpb = nn.Parameter(
+            torch.zeros((2*window_size-1)**2, num_heads)
+        )
+        nn.init.trunc_normal_(self.rpb, std=0.02)
+
+        coords   = torch.arange(window_size)
+        grid     = torch.stack(torch.meshgrid(coords, coords, indexing='ij'))
+        flat     = torch.flatten(grid, 1)
+        rel      = flat[:, :, None] - flat[:, None, :]
+        rel      = rel.permute(1, 2, 0).contiguous()
+        rel[:,:,0] += window_size - 1
+        rel[:,:,1] += window_size - 1
+        rel[:,:,0] *= 2 * window_size - 1
+        self.register_buffer('rpi', rel.sum(-1))   # relative position index
+
+        self.qkv       = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj      = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, x, mask=None):
+        B_, N, C = x.shape
+        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads,
+                                   C // self.num_heads).permute(2,0,3,1,4)
+        q, k, v = qkv.unbind(0)
+        attn = (q * self.scale) @ k.transpose(-2,-1)
+
+        bias = self.rpb[self.rpi.view(-1)].view(
+            self.ws**2, self.ws**2, -1).permute(2,0,1).contiguous()
+        attn = attn + bias.unsqueeze(0)
+
+        if mask is not None:
+            nW   = mask.shape[0]
+            attn = attn.view(B_//nW, nW, self.num_heads, N, N)
+            attn = attn + mask.unsqueeze(1).unsqueeze(0)
+            attn = attn.view(-1, self.num_heads, N, N)
+
+        attn = self.attn_drop(F.softmax(attn, dim=-1))
+        x    = (attn @ v).transpose(1,2).reshape(B_, N, C)
+        return self.proj_drop(self.proj(x))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  SWIN BLOCK  (W-MSA + SW-MSA pair, FiLM injected after MLP)
+# ════════════════════════════════════════════════════════════════════════════
+
+class _DropPath(nn.Module):
+    def __init__(self, p=0.):
+        super().__init__()
+        self.p = p
+
+    def forward(self, x):
+        if self.p == 0. or not self.training:
+            return x
+        keep = 1 - self.p
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        rand  = torch.rand(shape, dtype=x.dtype, device=x.device)
+        return x / keep * torch.floor(rand + keep)
+
+
+class SwinBlockDHM(nn.Module):
+    """
+    Single Swin Transformer block.
+    FiLM (gamma, beta) is applied after the second LayerNorm+MLP step.
+    """
+    def __init__(self, dim, num_heads, window_size, shift_size=0,
+                 mlp_ratio=4., drop=0., attn_drop=0., drop_path=0.):
+        super().__init__()
+        self.dim        = dim
+        self.ws         = window_size
+        self.shift      = shift_size
+
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn  = WindowAttentionDHM(dim, window_size, num_heads,
+                                        attn_drop=attn_drop, proj_drop=drop)
+        self.dp    = _DropPath(drop_path) if drop_path > 0 else nn.Identity()
+        self.norm2 = nn.LayerNorm(dim)
+        hid        = int(dim * mlp_ratio)
+        self.mlp   = nn.Sequential(
+            nn.Linear(dim, hid), nn.GELU(),
+            nn.Dropout(drop),
+            nn.Linear(hid, dim), nn.Dropout(drop),
+        )
+        self.H = self.W = None   # set by parent stage before forward
+
+    def _attn_mask(self, H, W, device):
+        if self.shift == 0:
+            return None
+        img = torch.zeros(1, H, W, 1, device=device)
+        hs  = (slice(0,-self.ws), slice(-self.ws,-self.shift), slice(-self.shift,None))
+        ws  = (slice(0,-self.ws), slice(-self.ws,-self.shift), slice(-self.shift,None))
+        cnt = 0
+        for h in hs:
+            for w in ws:
+                img[:,h,w,:] = cnt; cnt += 1
+        wins = _window_partition(img, self.ws).view(-1, self.ws**2)
+        mask = wins.unsqueeze(1) - wins.unsqueeze(2)
+        return mask.masked_fill(mask!=0, -100.).masked_fill(mask==0, 0.)
+
+    def forward(self, x, film_gamma=None, film_beta=None):
+        H, W   = self.H, self.W
+        B, L, C = x.shape
+        shortcut = x
+        x = self.norm1(x).view(B, H, W, C)
+
+        if self.shift > 0:
+            x = torch.roll(x, (-self.shift,-self.shift), (1,2))
+
+        wins   = _window_partition(x, self.ws).view(-1, self.ws**2, C)
+        mask   = self._attn_mask(H, W, x.device)
+        wins   = self.attn(wins, mask=mask)
+        x      = _window_reverse(wins.view(-1, self.ws, self.ws, C), self.ws, H, W)
+
+        if self.shift > 0:
+            x = torch.roll(x, (self.shift, self.shift), (1,2))
+
+        x = shortcut + self.dp(x.view(B, L, C))
+        x = x + self.dp(self.mlp(self.norm2(x)))
+
+        # FiLM modulation after MLP
+        if film_gamma is not None and film_beta is not None:
+            x = film_gamma.unsqueeze(1) * x + film_beta.unsqueeze(1)
+
+        return x
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  MULTI-WINDOW SWIN STAGE
+# ════════════════════════════════════════════════════════════════════════════
+
+class MWSwinStageDHM(nn.Module):
+    """
+    One backbone stage with a fixed window_size and depth W/SW block pairs.
+
+    Args
+    ----
+    dim         : int   token channels
+    num_heads   : int   attention heads
+    window_size : int   window size (4, 8, or 12 in your config)
+    depth       : int   number of Swin blocks (must be even: pairs of W+SW)
+    downsample  : bool  apply PatchMerging at the end
+    film_dim    : int   expected channel dim for FiLM (same as dim before merge)
+    drop_path   : list  stochastic depth rates, length == depth
+    """
+    def __init__(self, dim, num_heads, window_size, depth=2,
+                 downsample=True, mlp_ratio=4.,
+                 drop=0., attn_drop=0., drop_path=0.):
+        super().__init__()
+        self.ws    = window_size
+        self.shift = window_size // 2
+        self.depth = depth
+
+        dp = drop_path if isinstance(drop_path, list) else [drop_path] * depth
+        self.blocks = nn.ModuleList([
+            SwinBlockDHM(
+                dim=dim, num_heads=num_heads, window_size=window_size,
+                shift_size=0 if i % 2 == 0 else self.shift,
+                mlp_ratio=mlp_ratio, drop=drop,
+                attn_drop=attn_drop, drop_path=dp[i],
+            )
+            for i in range(depth)
+        ])
+        self.merge = PatchMergingDHM(dim) if downsample else None
+
+    def forward(self, x, H, W, film_gamma=None, film_beta=None):
+        """
+        x            : (B, H*W, C)
+        film_gamma   : (B, C) — applied after last block in this stage
+        film_beta    : (B, C)
+        Returns      : x_out (B,H*W,C),  H,  W,
+                       x_down (B,H/2*W/2,2C),  Hd,  Wd
+        """
+        for i, blk in enumerate(self.blocks):
+            blk.H, blk.W = H, W
+            # apply FiLM only on last block of stage
+            last = (i == len(self.blocks) - 1)
+            x = blk(x,
+                    film_gamma if last else None,
+                    film_beta  if last else None)
+
+        if self.merge is not None:
+            x_down, Hd, Wd = self.merge(x, H, W)
+            return x, H, W, x_down, Hd, Wd
+
+        return x, H, W, x, H, W   # no downsample → pass through
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  BiFPN LAYER
+# ════════════════════════════════════════════════════════════════════════════
+
+class _BiFPNConv(nn.Module):
+    """Depthwise-separable conv used inside BiFPN nodes."""
+    def __init__(self, c):
+        super().__init__()
+        self.dw  = nn.Conv2d(c, c, 3, padding=1, groups=c, bias=False)
+        self.pw  = nn.Conv2d(c, c, 1, bias=False)
+        self.bn  = nn.BatchNorm2d(c)
+        self.act = nn.SiLU(inplace=True)
+
+    def forward(self, x):
+        return self.act(self.bn(self.pw(self.dw(x))))
+
+
+class BiFPNLayerDHM(nn.Module):
+    """
+    One complete BiFPN layer over three feature levels P3/P4/P5.
+
+    All three input maps are projected to `neck_dim` channels first.
+    Weighted fusion uses fast normalised attention (ε-softmax).
+
+    Args
+    ----
+    in_dims  : tuple(int,int,int)  input channel counts (P3, P4, P5)
+    neck_dim : int                  unified channel count inside BiFPN
+    """
+    def __init__(self, in_dims=(96, 192, 384), neck_dim=256):
+        super().__init__()
+        d0, d1, d2 = in_dims
+        eps = 1e-4
+
+        # lateral projections (only used on first call; reused if same dims)
+        self.lat0 = nn.Sequential(
+            nn.Conv2d(d0, neck_dim, 1, bias=False),
+            nn.BatchNorm2d(neck_dim), nn.SiLU(inplace=True))
+        self.lat1 = nn.Sequential(
+            nn.Conv2d(d1, neck_dim, 1, bias=False),
+            nn.BatchNorm2d(neck_dim), nn.SiLU(inplace=True))
+        self.lat2 = nn.Sequential(
+            nn.Conv2d(d2, neck_dim, 1, bias=False),
+            nn.BatchNorm2d(neck_dim), nn.SiLU(inplace=True))
+
+        # top-down (td) fusion weights: (w_in, w_skip)
+        self.w_td1 = nn.Parameter(torch.ones(2))  # P4_td  = f(P5_up, P4)
+        self.w_td0 = nn.Parameter(torch.ones(2))  # P3_td  = f(P4_td_up, P3)
+        # bottom-up (bu) fusion weights
+        self.w_bu1 = nn.Parameter(torch.ones(3))  # P4_out = f(P4_td, P3_bu_down, P4)
+        self.w_bu2 = nn.Parameter(torch.ones(2))  # P5_out = f(P5, P4_out_down)
+
+        self.td1_conv  = _BiFPNConv(neck_dim)
+        self.td0_conv  = _BiFPNConv(neck_dim)
+        self.bu1_conv  = _BiFPNConv(neck_dim)
+        self.bu2_conv  = _BiFPNConv(neck_dim)
+
+        self.eps = eps
+        self._lateral_done = False
+
+    def _w(self, raw):
+        """Fast normalised weights (all positive, sum to 1)."""
+        w = F.relu(raw)
+        return w / (w.sum() + self.eps)
+
+    def forward(self, features):
+        """
+        features : list of 3 tensors [P3, P4, P5]
+                   On first call expects raw backbone channels (d0,d1,d2).
+                   On subsequent calls expects neck_dim channels.
+        Returns  : list [P3_out, P4_out, P5_out]  all (B, neck_dim, H_i, W_i)
+        """
+        p0, p1, p2 = features
+
+        # lateral projection (done in-place for first call)
+        if p0.shape[1] != self.lat0[0].out_channels:
+            p0 = self.lat0(p0)
+            p1 = self.lat1(p1)
+            p2 = self.lat2(p2)
+        # (after first call the caller passes already-projected maps,
+        #  but we keep lat projections available for safety)
+
+        # ── top-down path ────────────────────────────────────────────────
+        w = self._w(self.w_td1)
+        p4_td = self.td1_conv(
+            w[0] * p2 + w[1] * F.interpolate(p2, size=p1.shape[-2:],
+                                               mode='nearest')
+        )
+        # corrected: fuse p5-up with p4
+        w = self._w(self.w_td1)
+        td1_up = F.interpolate(p2, size=p1.shape[-2:], mode='nearest')
+        p4_td  = self.td1_conv(w[0] * p1 + w[1] * td1_up)
+
+        w = self._w(self.w_td0)
+        td0_up = F.interpolate(p4_td, size=p0.shape[-2:], mode='nearest')
+        p3_td  = self.td0_conv(w[0] * p0 + w[1] * td0_up)
+
+        # ── bottom-up path ───────────────────────────────────────────────
+        w    = self._w(self.w_bu1)
+        d_p3 = F.avg_pool2d(p3_td, kernel_size=2, stride=2)
+        p4_out = self.bu1_conv(w[0] * p1 + w[1] * p4_td + w[2] * d_p3)
+
+        w    = self._w(self.w_bu2)
+        d_p4 = F.avg_pool2d(p4_out, kernel_size=2, stride=2)
+        p5_out = self.bu2_conv(w[0] * p2 + w[1] * d_p4)
+
+        return [p3_td, p4_out, p5_out]   # P3(192²), P4(96²), P5(48²) at neck_dim
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  ASPP MODULE
+# ════════════════════════════════════════════════════════════════════════════
+
+class ASPPModuleDHM(nn.Module):
+    """
+    Atrous Spatial Pyramid Pooling.
+
+    Dilation rates chosen to match typical Fresnel zone ring radii at
+    λ=0.405 μm, z=0.36–1.17 mm, px=3.8 μm.
+
+    Args
+    ----
+    in_channels  : int
+    out_channels : int
+    dilations    : tuple  default (1, 2, 4, 8) — adapt to your fringe scale
+    """
+    def __init__(self, in_channels: int, out_channels: int,
+                 dilations: tuple = (1, 2, 4, 8)):
+        super().__init__()
+        self.branches = nn.ModuleList()
+
+        # 1×1 conv (dilation=1)
+        self.branches.append(nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels), nn.SiLU(inplace=True),
+        ))
+        # dilated 3×3 convs
+        for d in dilations[1:]:
+            self.branches.append(nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, 3,
+                          padding=d, dilation=d, bias=False),
+                nn.BatchNorm2d(out_channels), nn.SiLU(inplace=True),
+            ))
+        # global average pooling branch
+        self.gap = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels), nn.SiLU(inplace=True),
+        )
+        total_branches = len(dilations) + 1   # dilated + GAP
+        self.project = nn.Sequential(
+            nn.Conv2d(out_channels * total_branches, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels), nn.SiLU(inplace=True),
+            nn.Dropout2d(0.1),
+        )
+
+    def forward(self, x):
+        h, w   = x.shape[-2:]
+        feats  = [b(x) for b in self.branches]
+        gap_up = F.interpolate(self.gap(x), size=(h, w),
+                               mode='bilinear', align_corners=False)
+        feats.append(gap_up)
+        return self.project(torch.cat(feats, dim=1))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  LAPLACIAN PYRAMID DECODER
+# ════════════════════════════════════════════════════════════════════════════
+
+class LapPyramidDecoderDHM(nn.Module):
+    """
+    Laplacian sub-band residual decoder.
+
+    Reconstructs phase progressively:
+      level 3 (P5, 48²) → base estimate
+      level 2 (P4, 96²) → add sub-band residual
+      level 1 (P3, 192²) → add sub-band residual
+      upsample all → 768² final phase map
+
+    Each level computes:
+        x_up   = bilinear_upsample(prev)
+        res    = conv(current_feature - x_up)   ← Laplacian residual
+        out    = x_up + res
+
+    Args
+    ----
+    neck_dim     : int   channel count from BiFPN (all 3 levels same)
+    mid_channels : int   intermediate channels in residual convs
+    """
+    def __init__(self, neck_dim: int = 256, mid_channels: int = 128):
+        super().__init__()
+        # base at P5 (coarsest)
+        self.base_conv = nn.Sequential(
+            nn.Conv2d(neck_dim, mid_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_channels), nn.SiLU(inplace=True),
+            nn.Conv2d(mid_channels, 1, 1),  # → single-channel phase estimate
+        )
+        # residual at P4
+        self.res2_conv = nn.Sequential(
+            nn.Conv2d(neck_dim + 1, mid_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_channels), nn.SiLU(inplace=True),
+            nn.Conv2d(mid_channels, 1, 1),
+        )
+        # residual at P3
+        self.res1_conv = nn.Sequential(
+            nn.Conv2d(neck_dim + 1, mid_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_channels), nn.SiLU(inplace=True),
+            nn.Conv2d(mid_channels, 1, 1),
+        )
+        # final refinement to 768×768
+        self.final_conv = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1, bias=False),
+            nn.BatchNorm2d(32), nn.SiLU(inplace=True),
+            nn.Conv2d(32, 16, 3, padding=1, bias=False),
+            nn.BatchNorm2d(16), nn.SiLU(inplace=True),
+            nn.Conv2d(16, 1, 1),
+        )
+
+    def forward(self, neck_feats, target_size=(768, 768)):
+        """
+        neck_feats : [P3(192²), P4(96²), P5(48²)] all (B, neck_dim, H, W)
+        Returns    : (B, 1, 768, 768) phase map
+        """
+        p3, p4, p5 = neck_feats
+
+        # Level 3: base estimate at 48×48
+        base   = self.base_conv(p5)                          # (B,1,48,48)
+
+        # Level 2: upsample base → 96², compute Laplacian residual with P4
+        up2    = F.interpolate(base, size=p4.shape[-2:],
+                               mode='bilinear', align_corners=False)
+        lap2   = self.res2_conv(torch.cat([p4, up2], dim=1)) # (B,1,96,96)
+        out2   = up2 + lap2
+
+        # Level 1: upsample out2 → 192², compute Laplacian residual with P3
+        up1    = F.interpolate(out2, size=p3.shape[-2:],
+                               mode='bilinear', align_corners=False)
+        lap1   = self.res1_conv(torch.cat([p3, up1], dim=1)) # (B,1,192,192)
+        out1   = up1 + lap1
+
+        # Final: upsample to 768² and refine
+        out    = F.interpolate(out1, size=target_size,
+                               mode='bilinear', align_corners=False)
+        return self.final_conv(out)                          # (B,1,768,768)
