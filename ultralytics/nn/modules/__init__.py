@@ -16,8 +16,21 @@ Examples:
     >>> torch.onnx.export(m, x, f)
     >>> subprocess.run(f"onnxslim {f} {f} && open {f}", shell=True, check=True)  # pip install onnxslim
 """
-from .holography import (SwinTBackbone, PANetNeck, FiLMPhaseDecoder,
-                          FiLM, CBS, C2f as C2fHolo)
+
+
+
+from ultralytics.nn.modules.block import (
+    PatchEmbedDHM,
+    PatchMergingDHM,
+    MWSwinStageDHM,
+    BiFPNLayerDHM,
+    ASPPModuleDHM,
+    LapPyramidDecoderDHM,
+    RSFiLMGenerator,
+    SwinBlockDHM,
+    WindowAttentionDHM,
+)
+from ultralytics.nn.modules.head import PhaseRegressionHead
 from .block import (
     C1,
     C2,
