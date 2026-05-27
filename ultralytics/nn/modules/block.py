@@ -2558,47 +2558,91 @@ class BiFPNLayerDHM(nn.Module):
 
     def forward(self, features):
         """
-        features : list of 3 tensors [P3, P4, P5]
-                   On first call expects raw backbone channels (d0,d1,d2).
-                   On subsequent calls expects neck_dim channels.
-        Returns  : list [P3_out, P4_out, P5_out]  all (B, neck_dim, H_i, W_i)
+        features : [P3, P4, P5]
+        Returns  : [P3_out, P4_out, P5_out]
         """
+    
         p0, p1, p2 = features
-
-        # lateral projection (done in-place for first call)
+    
+        # ------------------------------------------------------------------
+        # LATERAL PROJECTION
+        # ------------------------------------------------------------------
         if p0.shape[1] != self.lat0[0].out_channels:
             p0 = self.lat0(p0)
             p1 = self.lat1(p1)
             p2 = self.lat2(p2)
-        # (after first call the caller passes already-projected maps,
-        #  but we keep lat projections available for safety)
-
-        # ── top-down path ────────────────────────────────────────────────
+    
+        # Debug shapes
+        # print("P3:", p0.shape)
+        # print("P4:", p1.shape)
+        # print("P5:", p2.shape)
+    
+        # ------------------------------------------------------------------
+        # TOP-DOWN PATH
+        # ------------------------------------------------------------------
+    
+        # P5 → P4
         w = self._w(self.w_td1)
-        p4_td = self.td1_conv(
-            w[0] * p2 + w[1] * F.interpolate(p2, size=p1.shape[-2:],
-                                               mode='nearest')
+    
+        p5_up = F.interpolate(
+            p2,
+            size=p1.shape[-2:],
+            mode='nearest'
         )
-        # corrected: fuse p5-up with p4
-        w = self._w(self.w_td1)
-        td1_up = F.interpolate(p2, size=p1.shape[-2:], mode='nearest')
-        p4_td  = self.td1_conv(w[0] * p1 + w[1] * td1_up)
-
+    
+        p4_td = self.td1_conv(
+            w[0] * p1 +
+            w[1] * p5_up
+        )
+    
+        # P4 → P3
         w = self._w(self.w_td0)
-        td0_up = F.interpolate(p4_td, size=p0.shape[-2:], mode='nearest')
-        p3_td  = self.td0_conv(w[0] * p0 + w[1] * td0_up)
-
-        # ── bottom-up path ───────────────────────────────────────────────
-        w    = self._w(self.w_bu1)
-        d_p3 = F.avg_pool2d(p3_td, kernel_size=2, stride=2)
-        p4_out = self.bu1_conv(w[0] * p1 + w[1] * p4_td + w[2] * d_p3)
-
-        w    = self._w(self.w_bu2)
-        d_p4 = F.avg_pool2d(p4_out, kernel_size=2, stride=2)
-        p5_out = self.bu2_conv(w[0] * p2 + w[1] * d_p4)
-
-        return [p3_td, p4_out, p5_out]   # P3(192²), P4(96²), P5(48²) at neck_dim
-
+    
+        p4_up = F.interpolate(
+            p4_td,
+            size=p0.shape[-2:],
+            mode='nearest'
+        )
+    
+        p3_td = self.td0_conv(
+            w[0] * p0 +
+            w[1] * p4_up
+        )
+    
+        # ------------------------------------------------------------------
+        # BOTTOM-UP PATH
+        # ------------------------------------------------------------------
+    
+        # P3 → P4
+        w = self._w(self.w_bu1)
+    
+        p3_down = F.avg_pool2d(
+            p3_td,
+            kernel_size=2,
+            stride=2
+        )
+    
+        p4_out = self.bu1_conv(
+            w[0] * p1 +
+            w[1] * p4_td +
+            w[2] * p3_down
+        )
+    
+        # P4 → P5
+        w = self._w(self.w_bu2)
+    
+        p4_down = F.avg_pool2d(
+            p4_out,
+            kernel_size=2,
+            stride=2
+        )
+    
+        p5_out = self.bu2_conv(
+            w[0] * p2 +
+            w[1] * p4_down
+        )
+    
+        return [p3_td, p4_out, p5_out]
 
 # ════════════════════════════════════════════════════════════════════════════
 #  ASPP MODULE
