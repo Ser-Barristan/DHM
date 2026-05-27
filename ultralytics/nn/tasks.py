@@ -10,9 +10,20 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 # Add this line to the existing imports in ultralytics/nn/tasks.py
-from ultralytics.nn.modules.holography import (   # noqa: F401
-    SwinTBackbone, PANetNeck, FiLMPhaseDecoder, FiLMLayer,
-    ConvBNSiLU, C2fBlock
+# DHM custom modules — appended to block.py and head.py
+from ultralytics.nn.modules.block import (        # noqa: F401
+    PatchEmbedDHM,
+    PatchMergingDHM,
+    MWSwinStageDHM,
+    BiFPNLayerDHM,
+    ASPPModuleDHM,
+    LapPyramidDecoderDHM,
+    RSFiLMGenerator,
+    SwinBlockDHM,
+    WindowAttentionDHM,
+)
+from ultralytics.nn.modules.head import (         # noqa: F401
+    PhaseRegressionHead,
 )
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
@@ -791,6 +802,94 @@ class ClassificationModel(BaseModel):
     def init_criterion(self):
         """Initialize the loss criterion for the ClassificationModel."""
         return v8ClassificationLoss()
+
+
+class PhaseRegressionModel(BaseModel):
+    """
+    DHMPhaseNet task model for dense phase regression.
+    Wraps DHMPhaseNet with the Ultralytics BaseModel interface.
+    Physics params (wavelength, L_value, z_value) are passed via
+    the batch dict during training and directly during inference.
+    """
+
+    def __init__(self, cfg="dhmnet_phase.yaml", ch=1, nc=1, verbose=True):
+        super().__init__()
+        # Load the YAML but build the static graph only for introspection;
+        # actual forward is handled by DHMPhaseNet directly.
+        from ultralytics.models.dhm.model import DHMPhaseNet
+        import yaml as _yaml
+        if isinstance(cfg, (str, Path)):
+            with open(cfg) as f:
+                cfg_dict = _yaml.safe_load(f)
+        else:
+            cfg_dict = cfg
+
+        mc = cfg_dict.get('model', {})
+        self.net = DHMPhaseNet(
+            embed_dim       = mc.get('embed_dim',       96),
+            window_sizes    = tuple(mc.get('window_sizes',   [4, 8, 12])),
+            num_heads       = tuple(mc.get('num_heads',      [3, 6, 12])),
+            depths          = tuple(mc.get('depths',         [2, 2, 6])),
+            neck_dim        = mc.get('neck_dim',        256),
+            aspp_dim        = mc.get('aspp_dim',        128),
+            mid_channels    = mc.get('mid_channels',    128),
+            film_hidden     = mc.get('film_hidden',     128),
+            pixel_size      = mc.get('pixel_size',      3.8e-3),
+            n_pix           = mc.get('n_pix',           768),
+            drop_rate       = mc.get('drop_rate',       0.0),
+            attn_drop_rate  = mc.get('attn_drop_rate',  0.0),
+            drop_path_rate  = mc.get('drop_path_rate',  0.1),
+        )
+        self.stride = torch.tensor([4.0])   # patch size
+        self.names  = {0: 'phase'}
+        if verbose:
+            n = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            LOGGER.info(f"PhaseRegressionModel  {n/1e6:.2f}M parameters")
+
+    # ── inference (called from Jupyter) ──────────────────────────────────
+    def predict(self, x, wavelength=None, L_value=None, z_value=None,
+                profile=False, visualize=False, augment=False, embed=None):
+        return self.net(x, wavelength, L_value, z_value)
+
+    def forward(self, x, *args, **kwargs):
+        # Training path: x is a batch dict
+        if isinstance(x, dict):
+            return self.loss(x, *args, **kwargs)
+        # Inference path: x is a tensor, physics passed as kwargs
+        return self.predict(x, **kwargs)
+
+    # ── training ─────────────────────────────────────────────────────────
+    def loss(self, batch, preds=None):
+        if getattr(self, 'criterion', None) is None:
+            self.criterion = self.init_criterion()
+        if preds is None:
+            preds = self.net(
+                batch['img'],
+                batch['wavelength'],
+                batch['L_value'],
+                batch['z_value'],
+            )
+        return self.criterion(preds, batch)
+
+    def init_criterion(self):
+        return _DHMPhaseLoss()
+
+    def _apply(self, fn):
+        self = super()._apply(fn)
+        return self
+
+
+class _DHMPhaseLoss(nn.Module):
+    """L1 loss on phase maps, returns (total_loss, detached_loss_tensor)
+    matching the (loss, loss_items) tuple Ultralytics trainers expect."""
+    def forward(self, pred, batch):
+        target = batch['phase'].to(pred.device)
+        loss   = nn.functional.l1_loss(pred, target)
+        return loss, loss.detach().unsqueeze(0)
+
+
+
+
 
 
 class RTDETRDetectionModel(DetectionModel):
@@ -1900,6 +1999,8 @@ def guess_model_task(model):
             return "pose"
         if "obb" in m:
             return "obb"
+        if "phase" in m:            # ← ADD THIS LINE ONLY
+            return "phase"
 
     # Guess from model cfg
     if isinstance(model, dict):
@@ -1926,6 +2027,9 @@ def guess_model_task(model):
                 return "obb"
             elif isinstance(m, (Detect, WorldDetect, YOLOEDetect, v10Detect)):
                 return "detect"
+            elif isinstance(m, PhaseRegressionHead):   # ← ADD THIS LINE ONLY
+                return "phase"
+
 
     # Guess from model filename
     if isinstance(model, (str, Path)):
