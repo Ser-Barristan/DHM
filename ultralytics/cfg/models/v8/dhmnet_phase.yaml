@@ -1,0 +1,48 @@
+# ultralytics/cfg/models/v8/dhmnet_phase.yaml
+# ============================================================
+# DHMPhaseNet: Multi-Window SwinT backbone + BiFPN neck
+#              + ASPP + Laplacian Pyramid head
+# Physics FiLM conditioning via RS (injected at runtime)
+# Input : 768×768 × 1ch grayscale hologram
+# Output: 768×768 × 1ch phase map (unbounded float)
+# ============================================================
+
+# task is 'phase' — handled by our custom trainer, NOT the standard
+# detect/segment/classify tasks
+task: phase
+
+# nc is 1 (single-channel continuous phase output)
+nc: 1
+
+# ── backbone ────────────────────────────────────────────────────────────────
+# Layer format: [from, repeats, module, args]
+#
+# MWSwinStageDHM args: [dim, num_heads, window_size, depth, downsample]
+#   Stage 0: dim=96,  heads=3,  ws=4,  depth=2, downsample=True  → 192×192→96×96
+#   Stage 1: dim=192, heads=6,  ws=8,  depth=2, downsample=True  → 96×96→48×48
+#   Stage 2: dim=384, heads=12, ws=12, depth=6, downsample=False → 48×48 (no merge)
+#
+# PatchEmbedDHM args: [in_chans, embed_dim, patch_size]
+#   768×768 → (768/4)²=192² tokens of dim 96
+# ─────────────────────────────────────────────────────────────────────────────
+backbone:
+  # [from, repeats, module,         args]
+  - [-1, 1, PatchEmbedDHM,         [1, 96, 4]]          # 0  (B,36864,96)  192×192
+  - [-1, 1, MWSwinStageDHM,        [96,  3,  4,  2, 1]] # 1  stage0 ws=4   → out(192²,96)  down(96²,192)
+  - [-1, 1, MWSwinStageDHM,        [192, 6,  8,  2, 1]] # 2  stage1 ws=8   → out(96²,192)  down(48²,384)
+  - [-1, 1, MWSwinStageDHM,        [384, 12, 12, 6, 0]] # 3  stage2 ws=12  → out(48²,384)  no-downsample
+
+# ── neck ─────────────────────────────────────────────────────────────────────
+# BiFPNLayerDHM args: [in_dims_list, neck_dim]
+#   Consumes [P3(96ch,192²), P4(192ch,96²), P5(384ch,48²)]
+#   Produces [P3(256ch,192²), P4(256ch,96²), P5(256ch,48²)]
+# ─────────────────────────────────────────────────────────────────────────────
+neck:
+  - [[1, 2, 3], 1, BiFPNLayerDHM,  [[96, 192, 384], 256]] # 4  first BiFPN pass
+
+# ── head ─────────────────────────────────────────────────────────────────────
+# PhaseRegressionHead args: [nc, neck_dim, aspp_dim, mid_channels]
+# Receives [P3, P4, P5] from BiFPN, outputs (B,1,768,768)
+# ─────────────────────────────────────────────────────────────────────────────
+head:
+  - [[4], 1, PhaseRegressionHead,  [1, 256, 128, 128]]   # 5  final output
