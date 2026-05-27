@@ -1865,3 +1865,84 @@ class SemanticSegment(nn.Module):
         if self.export and self.format != "coreml":  # coreml does not support interpolate
             return F.interpolate(logits, scale_factor=8, mode="bilinear", align_corners=False)
         return logits
+
+
+
+
+
+"""
+DHM Phase Regression Head for ultralytics/nn/modules/head.py
+=============================================================
+INSTRUCTION: Copy everything below and APPEND to the bottom of
+             ultralytics/nn/modules/head.py
+
+This head is referenced in dhmnet_phase.yaml as module 'PhaseRegressionHead'.
+It wires LapPyramidDecoderDHM inside a standard Ultralytics head interface.
+"""
+
+# ── imports already in head.py, listed for completeness ─────────────────────
+import torch
+import torch.nn as nn
+
+# import the blocks we defined
+# (when appended to the real head.py these are available in the same module)
+from ultralytics.nn.modules.block import (
+    LapPyramidDecoderDHM,
+    ASPPModuleDHM,
+)
+
+
+class PhaseRegressionHead(nn.Module):
+    """
+    Phase regression head compatible with Ultralytics task graph.
+
+    Receives three feature maps from BiFPN neck:
+        P3: (B, neck_dim, 192, 192)
+        P4: (B, neck_dim,  96,  96)
+        P5: (B, neck_dim,  48,  48)
+
+    Applies ASPP to each level, then Laplacian pyramid decoding to produce
+    a (B, 1, 768, 768) dense phase map.
+
+    Args
+    ----
+    neck_dim     : int   channel count of incoming BiFPN features (default 256)
+    aspp_dim     : int   ASPP output channels (default 128)
+    mid_channels : int   Laplacian decoder intermediate channels (default 128)
+    dilations    : tuple ASPP dilation rates
+    """
+    # Ultralytics uses this to identify output layers
+    dynamic = False
+    export  = False
+    shape   = None
+    anchors = []
+    strides = []
+
+    def __init__(self, nc: int = 1,
+                 neck_dim: int = 256,
+                 aspp_dim: int = 128,
+                 mid_channels: int = 128,
+                 dilations: tuple = (1, 2, 4, 8)):
+        super().__init__()
+        self.nc = nc   # kept for API compatibility (always 1 for phase)
+
+        # ASPP on each of the three BiFPN output levels
+        self.aspp3 = ASPPModuleDHM(neck_dim, aspp_dim, dilations)
+        self.aspp4 = ASPPModuleDHM(neck_dim, aspp_dim, dilations)
+        self.aspp5 = ASPPModuleDHM(neck_dim, aspp_dim, dilations)
+
+        # Laplacian decoder (expects aspp_dim channels from each level)
+        self.decoder = LapPyramidDecoderDHM(
+            neck_dim=aspp_dim, mid_channels=mid_channels
+        )
+
+    def forward(self, x):
+        """
+        x : list of 3 tensors [P3, P4, P5] from BiFPN neck
+        Returns: (B, 1, 768, 768) unbounded float phase map
+        """
+        p3, p4, p5 = x
+        p3 = self.aspp3(p3)
+        p4 = self.aspp4(p4)
+        p5 = self.aspp5(p5)
+        return self.decoder([p3, p4, p5])
