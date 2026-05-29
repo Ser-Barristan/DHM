@@ -39,25 +39,15 @@ backbone:
   - [-1, 1, SPPF,            [192, 5]]         # 8   out_ch=192  P5-level
 
 head:
-  # ── ASPP on P5 (adds global context before BiFPN) ───────────
-  - [-1, 1, SCDAspp,         [192]]            # 9   out_ch=192
 
-  # ── BiFPN Layer 1 ────────────────────────────────────────────
-  # from: [P3=layer3, P4=layer5, P5=layer9]
-  # neck_dim=192
-  - [[3, 5, 9], 1, SCDBiFPN, [192]]            # 10  out_ch=192  list[P3,P4,P5]
+  - [-1, 1, SCDAspp, [192]]
 
-  # ── BiFPN Layer 2 (second pass for richer fusion) ────────────
-  - [-1, 1, SCDBiFPN,        [192]]            # 11  out_ch=192  list[P3,P4,P5]
+  - [[3,5,9], 1, SCDBiFPN, [192]]
 
-  # ── Unpack P3 for Detect ─────────────────────────────────────
-  - [-1, 1, Index,           [0]]              # 12  P3 (B,192,64,64)
+  - [-1, 1, SCDBiFPN, [192]]
 
-  # ── Unpack P4 for Detect ─────────────────────────────────────
-  - [-2, 1, Index,           [1]]              # 13  P4 (B,192,32,32)
+  - [11, 1, Index, [0]]
+  - [11, 1, Index, [1]]
+  - [11, 1, Index, [2]]
 
-  # ── Unpack P5 for Detect ─────────────────────────────────────
-  - [-3, 1, Index,           [2]]              # 14  P5 (B,192,16,16)
-
-  # ── YOLO Detect head (UNTOUCHED) ─────────────────────────────
-  - [[12, 13, 14], 1, Detect, [nc]]            # 15  Detect(P3,P4,P5)
+  - [[12,13,14], 1, Detect, [nc]]
