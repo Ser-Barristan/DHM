@@ -1891,8 +1891,7 @@ def parse_model(d, ch, verbose=True):
             if m is C2fCIB:
                 legacy = False
         elif m is MambaSPPFASPPBiFPNDetector:
-        
-            c2 = [256, 256, 256]
+            c2 = [args[4], args[4], args[4]]   # neck_ch repeated for P3/P4/P5
         
         elif m is AIFI:
             args = [ch[f], *args]
