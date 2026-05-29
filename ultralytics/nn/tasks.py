@@ -37,6 +37,15 @@ from ultralytics.nn.modules.block import (
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
+MambaSSM,
+MambaBlock,
+MambaStem,
+MambaStage,
+MambaBackboneNet,
+AGASPPDet,
+BiFPNDet,
+MambaSPPFASPPBiFPNNeck,
+MambaSPPFASPPBiFPNDetector,
     SCDPatchEmbed,
     SCDPatchMerge,
     SCDSwinStage,
@@ -1881,6 +1890,10 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
+        elif m is MambaSPPFASPPBiFPNDetector:
+        
+            c2 = [256, 256, 256]
+        
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
