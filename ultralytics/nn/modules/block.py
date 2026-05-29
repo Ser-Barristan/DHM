@@ -2784,320 +2784,292 @@ class LapPyramidDecoderDHM(nn.Module):
 
 
 
-
-
 # ============================================================
 # SCD (Sickle Cell Detection) custom blocks
-# Append to ultralytics/nn/modules/block.py
+# Replace/append to ultralytics/nn/modules/block.py
 # ============================================================
 
-import math
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
-
-# ─────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────
-
-def _window_partition_scd(x: torch.Tensor, ws: int) -> torch.Tensor:
+def _scd_window_partition(x: torch.Tensor, ws: int) -> torch.Tensor:
     """(B, H, W, C) → (B*nW, ws*ws, C)"""
     B, H, W, C = x.shape
     x = x.view(B, H // ws, ws, W // ws, ws, C)
-    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous()
-    return windows.view(-1, ws * ws, C)
+    return x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, ws * ws, C)
 
 
-def _window_reverse_scd(windows: torch.Tensor, ws: int, H: int, W: int) -> torch.Tensor:
+def _scd_window_reverse(windows: torch.Tensor, ws: int, H: int, W: int) -> torch.Tensor:
     """(B*nW, ws*ws, C) → (B, H, W, C)"""
-    B = int(windows.shape[0] / (H // ws * W // ws))
     C = windows.shape[-1]
-    x = windows.view(B, H // ws, W // ws, ws, ws, C)
-    return x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, C)
+    B = int(windows.shape[0] / (H // ws * W // ws))
+    return (windows.view(B, H // ws, W // ws, ws, ws, C)
+            .permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, C))
 
 
-class _DropPathSCD(nn.Module):
-    """Stochastic depth per sample."""
-    def __init__(self, drop_prob: float = 0.0):
+class _SCDDropPath(nn.Module):
+    def __init__(self, p: float = 0.0):
         super().__init__()
-        self.drop_prob = drop_prob
+        self.p = p
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.drop_prob == 0.0 or not self.training:
+        if self.p == 0.0 or not self.training:
             return x
-        keep_prob = 1.0 - self.drop_prob
+        keep = 1.0 - self.p
         shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-        random_tensor = torch.rand(shape, dtype=x.dtype, device=x.device)
-        random_tensor = torch.floor(random_tensor + keep_prob)
-        return x * random_tensor / keep_prob
+        mask = torch.bernoulli(
+            torch.full(shape, keep, device=x.device, dtype=x.dtype))
+        return x * mask / keep
 
 
 # ─────────────────────────────────────────────────────────────
-# 1. Patch Embedding
+# SCDPatchEmbed
 # ─────────────────────────────────────────────────────────────
 
 class SCDPatchEmbed(nn.Module):
     """
     Convolutional patch embedding.
+    (B, in_chans, H, W) → (B, embed_dim, H/patch_size, W/patch_size)
 
-    Maps (B, in_chans, H, W) → spatial feature map (B, embed_dim, H/ps, W/ps).
-    Output is kept as a 4-D tensor so parse_model's channel tracking works
-    naturally (c2 = embed_dim).
-
-    Args:
-        in_chans  : input channels (1 for grayscale hologram, 3 for RGB)
-        embed_dim : output channels
-        patch_size: downsampling stride (default 4)
+    parse_model args injection: YAML args=[embed_dim, patch_size],
+    parse_model prepends c1 → __init__(in_chans, embed_dim, patch_size).
     """
 
-    def __init__(self, in_chans: int = 1, embed_dim: int = 48, patch_size: int = 4):
+    def __init__(self, in_chans: int, embed_dim: int, patch_size: int = 4):
         super().__init__()
         self.proj = nn.Conv2d(in_chans, embed_dim,
-                              kernel_size=patch_size, stride=patch_size, bias=False)
+                              kernel_size=patch_size, stride=patch_size,
+                              bias=False)
         self.norm = nn.BatchNorm2d(embed_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, C_in, H, W)
-        return self.norm(self.proj(x))   # (B, embed_dim, H/ps, W/ps)
+        return self.norm(self.proj(x))
 
 
 # ─────────────────────────────────────────────────────────────
-# 2. Patch Merging (2× spatial downsampling, 2× channel)
+# SCDPatchMerge
 # ─────────────────────────────────────────────────────────────
 
 class SCDPatchMerge(nn.Module):
     """
-    Pixel-shuffle downsampling: (B, C, H, W) → (B, 2C, H/2, W/2).
+    2× spatial downsampling: (B, C, H, W) → (B, 2C, H/2, W/2).
+    Uses pixel-shuffle concat + LayerNorm + Linear projection.
 
-    Operates fully in 4-D space so it is transparent to parse_model.
-    Output channels = 2 * input channels.
-
-    Args:
-        dim: input channel count (c1 for parse_model)
+    parse_model args injection: YAML args=[], parse_model passes [ch[f]] → __init__(dim).
+    Output channels c2 = 2 * dim (declared in tasks.py parse_model override).
     """
 
     def __init__(self, dim: int):
         super().__init__()
         self.norm = nn.LayerNorm(4 * dim)
         self.proj = nn.Linear(4 * dim, 2 * dim, bias=False)
-        self.out_channels = 2 * dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, C, H, W)
         B, C, H, W = x.shape
-        # Pixel-shuffle gather: collect 2×2 patches
-        x = x.permute(0, 2, 3, 1)          # (B, H, W, C)
-        x0 = x[:, 0::2, 0::2, :]
-        x1 = x[:, 1::2, 0::2, :]
-        x2 = x[:, 0::2, 1::2, :]
-        x3 = x[:, 1::2, 1::2, :]
-        x = torch.cat([x0, x1, x2, x3], dim=-1)   # (B, H/2, W/2, 4C)
-        x = self.norm(x)
-        x = self.proj(x)                            # (B, H/2, W/2, 2C)
-        return x.permute(0, 3, 1, 2).contiguous()  # (B, 2C, H/2, W/2)
+        # Pad to even spatial dims if needed
+        pad_h = H % 2
+        pad_w = W % 2
+        if pad_h or pad_w:
+            x = F.pad(x, (0, pad_w, 0, pad_h))
+        _, _, H, W = x.shape
+        t = x.permute(0, 2, 3, 1)                          # (B, H, W, C)
+        t = torch.cat([t[:, 0::2, 0::2],
+                       t[:, 1::2, 0::2],
+                       t[:, 0::2, 1::2],
+                       t[:, 1::2, 1::2]], dim=-1)           # (B, H/2, W/2, 4C)
+        t = self.proj(self.norm(t))                         # (B, H/2, W/2, 2C)
+        return t.permute(0, 3, 1, 2).contiguous()
 
 
 # ─────────────────────────────────────────────────────────────
-# 3. Window Attention
+# Window Attention
 # ─────────────────────────────────────────────────────────────
 
 class _SCDWindowAttn(nn.Module):
-    """Shifted/non-shifted window multi-head self-attention with relative positional bias."""
+    """Window MHSA with relative positional bias. Table is built for ws×ws."""
 
-    def __init__(self, dim: int, window_size: int, num_heads: int,
+    def __init__(self, dim: int, ws: int, num_heads: int,
                  attn_drop: float = 0.0, proj_drop: float = 0.0):
         super().__init__()
-        self.ws = window_size
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        self.scale = head_dim ** -0.5
+        self.ws = ws
+        self.nh = num_heads
+        self.scale = (dim // num_heads) ** -0.5
 
-        # Relative position bias table: (2*ws-1)^2 × num_heads
-        self.rpb_table = nn.Parameter(
-            torch.zeros((2 * window_size - 1) ** 2, num_heads))
-        nn.init.trunc_normal_(self.rpb_table, std=0.02)
+        self.rpb = nn.Parameter(torch.zeros((2 * ws - 1) ** 2, num_heads))
+        nn.init.trunc_normal_(self.rpb, std=0.02)
 
-        # Pre-compute relative position index
-        coords = torch.arange(window_size)
+        coords = torch.arange(ws)
         gy, gx = torch.meshgrid(coords, coords, indexing='ij')
-        flat = torch.stack([gy.flatten(), gx.flatten()], dim=0)  # (2, ws^2)
-        rel = flat[:, :, None] - flat[:, None, :]                # (2, ws^2, ws^2)
+        flat = torch.stack([gy.flatten(), gx.flatten()])    # (2, ws^2)
+        rel = flat[:, :, None] - flat[:, None, :]           # (2, N, N)
         rel = rel.permute(1, 2, 0).contiguous()
-        rel[:, :, 0] += window_size - 1
-        rel[:, :, 1] += window_size - 1
-        rel[:, :, 0] *= 2 * window_size - 1
-        rpi = rel.sum(-1)  # (ws^2, ws^2)
-        self.register_buffer('rpi', rpi)
+        rel[..., 0] += ws - 1
+        rel[..., 1] += ws - 1
+        rel[..., 0] *= 2 * ws - 1
+        self.register_buffer('rpi', rel.sum(-1))            # (ws^2, ws^2)
 
         self.qkv = nn.Linear(dim, dim * 3, bias=True)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor,
+                mask: torch.Tensor | None = None) -> torch.Tensor:
         B_, N, C = x.shape
-        nh = self.num_heads
-        head_dim = C // nh
-
-        qkv = self.qkv(x).reshape(B_, N, 3, nh, head_dim).permute(2, 0, 3, 1, 4)
+        nh, hd = self.nh, C // self.nh
+        qkv = (self.qkv(x).reshape(B_, N, 3, nh, hd)
+               .permute(2, 0, 3, 1, 4))
         q, k, v = qkv.unbind(0)
-        
         attn = (q * self.scale) @ k.transpose(-2, -1)
-        
-        bias = self.rpb_table[self.rpi.view(-1)].view(
-            self.ws**2,
-            self.ws**2,
-            nh
-        ).permute(2, 0, 1).contiguous()
-        
-        bias = bias.to(attn.dtype)
-        
+
+        bias = (self.rpb[self.rpi.view(-1)]
+                .view(self.ws ** 2, self.ws ** 2, nh)
+                .permute(2, 0, 1).contiguous())
         attn = attn + bias.unsqueeze(0)
-        
+
         if mask is not None:
-        
-            mask = mask.to(attn.dtype)
-        
             nW = mask.shape[0]
-        
             attn = attn.view(B_ // nW, nW, nh, N, N)
-        
             attn = attn + mask.unsqueeze(1).unsqueeze(0)
-        
             attn = attn.view(-1, nh, N, N)
-        
+
         attn = self.attn_drop(attn.softmax(dim=-1))
-        
-        v = v.to(attn.dtype)
-        
-        x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
-        
-        return self.proj_drop(self.proj(x))
+        out = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+        return self.proj_drop(self.proj(out))
 
 
 # ─────────────────────────────────────────────────────────────
-# 4. Swin Block (single W-MSA or SW-MSA block)
+# Swin Block — with dynamic padding/unpadding
 # ─────────────────────────────────────────────────────────────
 
 class _SCDSwinBlock(nn.Module):
-    """One Swin Transformer block with optional cyclic shift."""
+    """
+    Single Swin Transformer block operating on (B, C, H, W).
 
-    def __init__(self, dim: int, num_heads: int, window_size: int,
-                 shift_size: int = 0, mlp_ratio: float = 4.0,
+    Pads H and W to the nearest multiple of window_size before partitioning,
+    then removes the padding from the output. This guarantees correctness
+    regardless of whether the spatial dimensions are exact multiples of ws.
+    """
+
+    def __init__(self, dim: int, num_heads: int, ws: int,
+                 shift: int = 0, mlp_ratio: float = 4.0,
                  drop: float = 0.0, attn_drop: float = 0.0,
                  drop_path: float = 0.0):
         super().__init__()
-        self.ws = window_size
-        self.shift = shift_size
+        self.ws = ws
+        self.shift = shift
         self.norm1 = nn.LayerNorm(dim)
-        self.attn = _SCDWindowAttn(dim, window_size, num_heads,
+        self.attn = _SCDWindowAttn(dim, ws, num_heads,
                                    attn_drop=attn_drop, proj_drop=drop)
-        self.dp = _DropPathSCD(drop_path) if drop_path > 0.0 else nn.Identity()
+        self.dp = _SCDDropPath(drop_path) if drop_path > 0 else nn.Identity()
         self.norm2 = nn.LayerNorm(dim)
         hid = int(dim * mlp_ratio)
         self.mlp = nn.Sequential(
             nn.Linear(dim, hid), nn.GELU(), nn.Dropout(drop),
             nn.Linear(hid, dim), nn.Dropout(drop),
         )
-        # H/W set by stage before each forward call
-        self.H: int = 0
-        self.W: int = 0
 
-    def _build_mask(self, device: torch.device) -> torch.Tensor | None:
+    def _pad_to_window(self, x: torch.Tensor) -> tuple:
+        """Pad (B,H,W,C) so H and W are multiples of ws. Returns (padded, H_orig, W_orig)."""
+        H, W = x.shape[1], x.shape[2]
+        pad_h = (self.ws - H % self.ws) % self.ws
+        pad_w = (self.ws - W % self.ws) % self.ws
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, 0, 0, pad_w, 0, pad_h))   # pad (C=last dim untouched)
+        return x, H, W
+
+    def _mask(self, Hp: int, Wp: int,
+              device: torch.device) -> torch.Tensor | None:
+        """Build cyclic-shift attention mask on padded spatial dims Hp×Wp."""
         if self.shift == 0:
             return None
-        H, W, ws, s = self.H, self.W, self.ws, self.shift
-        img = torch.zeros(1, H, W, 1, device=device)
-        for h_slice, w_slice, idx in (
-            (slice(0, -ws), slice(0, -ws), 0),
-            (slice(0, -ws), slice(-ws, -s), 1),
-            (slice(0, -ws), slice(-s, None), 2),
-            (slice(-ws, -s), slice(0, -ws), 3),
-            (slice(-ws, -s), slice(-ws, -s), 4),
-            (slice(-ws, -s), slice(-s, None), 5),
-            (slice(-s, None), slice(0, -ws), 6),
-            (slice(-s, None), slice(-ws, -s), 7),
-            (slice(-s, None), slice(-s, None), 8),
-        ):
-            img[:, h_slice, w_slice, :] = idx
-        wins = _window_partition_scd(img, ws)   # (nW, ws^2, 1)
-        wins = wins.squeeze(-1)                  # (nW, ws^2)
-        mask = wins.unsqueeze(1) - wins.unsqueeze(2)   # (nW, ws^2, ws^2)
-        mask = mask.masked_fill(mask != 0, -100.0).masked_fill(mask == 0, 0.0)
-        return mask
+        ws, s = self.ws, self.shift
+        img = torch.zeros(1, Hp, Wp, 1, device=device)
+        cnt = 0
+        for hs in (slice(0, -ws), slice(-ws, -s), slice(-s, None)):
+            for ws_ in (slice(0, -ws), slice(-ws, -s), slice(-s, None)):
+                img[:, hs, ws_, :] = cnt
+                cnt += 1
+        wins = _scd_window_partition(img, ws).squeeze(-1)   # (nW, ws^2)
+        m = wins.unsqueeze(1) - wins.unsqueeze(2)
+        return m.masked_fill(m != 0, -100.0).masked_fill(m == 0, 0.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, C, H, W)
         B, C, H, W = x.shape
-        self.H, self.W = H, W
-        shortcut = x
+        skip = x
 
-        # → tokens
-        x_t = x.permute(0, 2, 3, 1)   # (B, H, W, C)
-        x_t = self.norm1(x_t)
+        # Convert to (B, H, W, C) token layout
+        t = x.permute(0, 2, 3, 1)          # (B, H, W, C)
 
-        # Cyclic shift
-        if self.shift > 0:
-            x_t = torch.roll(x_t, shifts=(-self.shift, -self.shift), dims=(1, 2))
+        # Pad to window-size multiple
+        t, H_orig, W_orig = self._pad_to_window(t)
+        Hp, Wp = t.shape[1], t.shape[2]
 
-        # Window partition
-        wins = _window_partition_scd(x_t, self.ws)   # (B*nW, ws^2, C)
-        mask = self._build_mask(x.device)
-        wins = self.attn(wins, mask=mask)
+        t = self.norm1(t)
 
-        # Window reverse
-        x_t = _window_reverse_scd(wins, self.ws, H, W)  # (B, H, W, C)
+        # Cyclic shift on padded map
+        if self.shift:
+            t = torch.roll(t, shifts=(-self.shift, -self.shift), dims=(1, 2))
 
-        # Reverse shift
-        if self.shift > 0:
-            x_t = torch.roll(x_t, shifts=(self.shift, self.shift), dims=(1, 2))
+        # Partition → attend → reverse
+        wins = _scd_window_partition(t, self.ws)
+        wins = self.attn(wins, mask=self._mask(Hp, Wp, x.device))
+        t = _scd_window_reverse(wins, self.ws, Hp, Wp)     # (B, Hp, Wp, C)
 
-        x_t = x_t.permute(0, 3, 1, 2).contiguous()  # (B, C, H, W)
-        x = shortcut + self.dp(x_t)
+        # Reverse cyclic shift
+        if self.shift:
+            t = torch.roll(t, shifts=(self.shift, self.shift), dims=(1, 2))
 
-        # MLP
-        res = x.permute(0, 2, 3, 1)    # (B, H, W, C)
-        res = self.norm2(res)
-        res = self.mlp(res)
-        res = res.permute(0, 3, 1, 2).contiguous()
-        x = x + self.dp(res)
-        return x
+        # Remove padding
+        t = t[:, :H_orig, :W_orig, :].contiguous()         # (B, H, W, C)
+
+        # Back to (B, C, H, W) and residual
+        t = t.permute(0, 3, 1, 2).contiguous()
+        x = skip + self.dp(t)
+
+        # MLP branch
+        t = self.norm2(x.permute(0, 2, 3, 1))
+        t = self.mlp(t).permute(0, 3, 1, 2).contiguous()
+        return x + self.dp(t)
 
 
 # ─────────────────────────────────────────────────────────────
-# 5. Multi-Window Swin Stage  (YAML module)
+# SCDSwinStage  (YAML-registered module)
 # ─────────────────────────────────────────────────────────────
 
 class SCDSwinStage(nn.Module):
     """
-    One Swin Transformer stage operating on 4-D feature maps (B, C, H, W).
+    Multi-window Swin Transformer stage on 4-D (B, C, H, W) feature maps.
 
-    Pairs of (W-MSA block, SW-MSA block) are stacked `depth` times.
-    parse_model sees: c1 = c2 = dim  (channels unchanged; merging is a separate layer).
+    Stacks `depth` W/SW-MSA block pairs. Output channels == input channels.
+    Spatial downsampling is done by a separate SCDPatchMerge layer.
+
+    Each block pads its input to the nearest ws multiple and unpads the output,
+    so this stage works on any spatial size ≥ ws.
+
+    parse_model injection: YAML args=[window_size, depth, ...],
+    tasks.py prepends dim=c1 → __init__(dim, window_size, depth, ...).
 
     Args:
-        dim        : channel count (must equal c1 from parse_model)
-        num_heads  : attention heads
-        window_size: window size (must divide spatial dims)
-        depth      : number of blocks (even number recommended)
+        dim        : channel count (== c1 from parse_model)
+        num_heads  : derived as max(dim // 32, 1) — no YAML arg needed
+        window_size: ws (must be ≤ spatial size; padding handles non-multiples)
+        depth      : number of blocks
         mlp_ratio  : MLP expansion ratio
-        drop_path  : stochastic depth rate (scalar, same for all blocks)
+        drop_path  : peak stochastic-depth rate
     """
 
-    def __init__(self, dim: int, num_heads: int, window_size: int = 8,
-                 depth: int = 2, mlp_ratio: float = 4.0,
-                 drop: float = 0.0, attn_drop: float = 0.0,
-                 drop_path: float = 0.0):
+    def __init__(self, dim: int, window_size: int = 8, depth: int = 2,
+                 mlp_ratio: float = 4.0, drop: float = 0.0,
+                 attn_drop: float = 0.0, drop_path: float = 0.1):
         super().__init__()
+        num_heads = max(dim // 32, 1)
         shift = window_size // 2
         dp_rates = [drop_path * i / max(depth - 1, 1) for i in range(depth)]
         self.blocks = nn.ModuleList([
             _SCDSwinBlock(
-                dim=dim, num_heads=num_heads, window_size=window_size,
-                shift_size=0 if i % 2 == 0 else shift,
-                mlp_ratio=mlp_ratio, drop=drop, attn_drop=attn_drop,
-                drop_path=dp_rates[i],
+                dim=dim, num_heads=num_heads, ws=window_size,
+                shift=0 if i % 2 == 0 else shift,
+                mlp_ratio=mlp_ratio, drop=drop,
+                attn_drop=attn_drop, drop_path=dp_rates[i],
             )
             for i in range(depth)
         ])
@@ -3109,49 +3081,47 @@ class SCDSwinStage(nn.Module):
 
 
 # ─────────────────────────────────────────────────────────────
-# 6. ASPP (Atrous Spatial Pyramid Pooling)  (YAML module)
+# SCDAspp  (YAML-registered module)
 # ─────────────────────────────────────────────────────────────
 
 class SCDAspp(nn.Module):
     """
-    Atrous Spatial Pyramid Pooling with hologram-tuned dilation rates.
+    Atrous Spatial Pyramid Pooling.
 
-    Branches: 1×1, 3×3@d=2, 3×3@d=4, 3×3@d=8, GAP → project.
-    Output channels equal `out_channels`.
-    Input/output are standard 4-D tensors.
+    (B, in_channels, H, W) → (B, out_channels, H, W)
+
+    parse_model injection: YAML args=[out_channels],
+    tasks.py prepends in_channels=c1 → __init__(in_channels, out_channels, ...).
 
     Args:
-        in_channels : c1 (from parse_model)
-        out_channels: c2 (declared in YAML args[0])
-        dilations   : tuple of dilation rates (first is always 1 for 1×1)
+        in_channels : c1, injected by parse_model
+        out_channels: YAML args[0]
+        dilations   : dilation rates (default (1, 2, 4, 8))
     """
 
     def __init__(self, in_channels: int, out_channels: int,
                  dilations: tuple = (1, 2, 4, 8)):
         super().__init__()
-        self.branches = nn.ModuleList()
-
-        # 1×1 branch
-        self.branches.append(nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 1, bias=False),
-            nn.BatchNorm2d(out_channels), nn.SiLU(inplace=True),
-        ))
-        # Dilated 3×3 branches
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, 1, bias=False),
+                nn.BatchNorm2d(out_channels), nn.SiLU(inplace=True),
+            )
+        ])
         for d in dilations[1:]:
             self.branches.append(nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, 3,
                           padding=d, dilation=d, bias=False),
                 nn.BatchNorm2d(out_channels), nn.SiLU(inplace=True),
             ))
-        # GAP branch
         self.gap = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(in_channels, out_channels, 1, bias=False),
             nn.BatchNorm2d(out_channels), nn.SiLU(inplace=True),
         )
-        n_total = len(dilations) + 1   # dilated branches + GAP
+        n = len(dilations) + 1
         self.project = nn.Sequential(
-            nn.Conv2d(out_channels * n_total, out_channels, 1, bias=False),
+            nn.Conv2d(out_channels * n, out_channels, 1, bias=False),
             nn.BatchNorm2d(out_channels), nn.SiLU(inplace=True),
             nn.Dropout2d(0.1),
         )
@@ -3159,25 +3129,23 @@ class SCDAspp(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h, w = x.shape[-2:]
         feats = [b(x) for b in self.branches]
-        gap_up = F.interpolate(self.gap(x), size=(h, w),
-                               mode='bilinear', align_corners=False)
-        feats.append(gap_up)
+        feats.append(F.interpolate(self.gap(x), size=(h, w),
+                                   mode='bilinear', align_corners=False))
         return self.project(torch.cat(feats, dim=1))
 
 
 # ─────────────────────────────────────────────────────────────
-# 7. BiFPN Layer  (YAML module)
+# SCDBiFPN  (YAML-registered module)
 # ─────────────────────────────────────────────────────────────
 
-class _SCDBiFPNConv(nn.Module):
-    """Depthwise-separable BN+SiLU conv for BiFPN nodes."""
+class _SCDBiFPNNode(nn.Module):
+    """Depthwise-separable BN+SiLU fusion node."""
 
-    def __init__(self, channels: int):
+    def __init__(self, ch: int):
         super().__init__()
-        self.dw = nn.Conv2d(channels, channels, 3, padding=1,
-                            groups=channels, bias=False)
-        self.pw = nn.Conv2d(channels, channels, 1, bias=False)
-        self.bn = nn.BatchNorm2d(channels)
+        self.dw = nn.Conv2d(ch, ch, 3, padding=1, groups=ch, bias=False)
+        self.pw = nn.Conv2d(ch, ch, 1, bias=False)
+        self.bn = nn.BatchNorm2d(ch)
         self.act = nn.SiLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -3188,86 +3156,66 @@ class SCDBiFPN(nn.Module):
     """
     One BiFPN layer over three feature levels [P3, P4, P5].
 
-    Accepts a Python list of three tensors; returns a list of three tensors.
-    Lateral projections align all channels to `neck_dim` on first call if
-    needed. Fast-normalized weighted fusion (ε-softmax) is used throughout.
+    Accepts and returns a Python list of three 4-D tensors.
+    Lateral projections align all levels to neck_dim channels on first call.
+    Fast normalised fusion weights (ε-softmax) are used.
 
-    In the YAML `from` field, reference the three backbone outputs as a list.
-    parse_model treats this module via the `else: c2 = ch[f]` path, so we
-    must declare our output channel via a custom override — handled in task.py.
+    parse_model injection: tasks.py passes in_dims=tuple(ch[x] for x in f)
+    as first arg → __init__(in_dims, neck_dim).
 
     Args:
-        in_dims  : (P3_ch, P4_ch, P5_ch) input channel counts
-        neck_dim : unified internal + output channel count
+        in_dims : (P3_ch, P4_ch, P5_ch), injected by tasks.py
+        neck_dim: unified channel count (YAML args[0])
     """
 
     _EPS = 1e-4
 
-    def __init__(self, in_dims: tuple = (128, 256, 192), neck_dim: int = 192):
+    def __init__(self, in_dims: tuple, neck_dim: int = 192):
         super().__init__()
-        d0, d1, d2 = in_dims
+        self.nd = neck_dim
 
-        # Lateral projections (run once to align channels)
         self.lat = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(d, neck_dim, 1, bias=False),
-                nn.BatchNorm2d(neck_dim), nn.SiLU(inplace=True))
-            if d != neck_dim else nn.Identity()
-            for d in (d0, d1, d2)
+                nn.BatchNorm2d(neck_dim), nn.SiLU(inplace=True),
+            ) if d != neck_dim else nn.Identity()
+            for d in in_dims
         ])
 
-        # Top-down fusion weights
-        self.w_td4 = nn.Parameter(torch.ones(2))   # P4_td = f(P5↑, P4)
-        self.w_td3 = nn.Parameter(torch.ones(2))   # P3_td = f(P4_td↑, P3)
+        self.w_td4 = nn.Parameter(torch.ones(2))
+        self.w_td3 = nn.Parameter(torch.ones(2))
+        self.w_bu4 = nn.Parameter(torch.ones(3))
+        self.w_bu5 = nn.Parameter(torch.ones(2))
 
-        # Bottom-up fusion weights
-        self.w_bu4 = nn.Parameter(torch.ones(3))   # P4_out = f(P4_td, P3↓, P4)
-        self.w_bu5 = nn.Parameter(torch.ones(2))   # P5_out = f(P5, P4↓)
+        self.node_td4 = _SCDBiFPNNode(neck_dim)
+        self.node_td3 = _SCDBiFPNNode(neck_dim)
+        self.node_bu4 = _SCDBiFPNNode(neck_dim)
+        self.node_bu5 = _SCDBiFPNNode(neck_dim)
 
-        self.conv_td4 = _SCDBiFPNConv(neck_dim)
-        self.conv_td3 = _SCDBiFPNConv(neck_dim)
-        self.conv_bu4 = _SCDBiFPNConv(neck_dim)
-        self.conv_bu5 = _SCDBiFPNConv(neck_dim)
-
-        self.neck_dim = neck_dim
-
-    def _norm_w(self, w: nn.Parameter) -> torch.Tensor:
-        w = F.relu(w)
+    def _w(self, raw: nn.Parameter) -> torch.Tensor:
+        w = F.relu(raw)
         return w / (w.sum() + self._EPS)
 
     def forward(self, features: list) -> list:
-        p3, p4, p5 = features
+        p3, p4, p5 = [self.lat[i](f) for i, f in enumerate(features)]
 
-        # Lateral projection
-        p3 = self.lat[0](p3)
-        p4 = self.lat[1](p4)
-        p5 = self.lat[2](p5)
+        # Top-down
+        w = self._w(self.w_td4)
+        p4_td = self.node_td4(
+            w[0] * p4 + w[1] * F.interpolate(p5, size=p4.shape[-2:], mode='nearest'))
 
-        # Top-down path
-        w = self._norm_w(self.w_td4)
-        p4_td = self.conv_td4(
-            w[0] * p4 +
-            w[1] * F.interpolate(p5, size=p4.shape[-2:], mode='nearest')
-        )
+        w = self._w(self.w_td3)
+        p3_td = self.node_td3(
+            w[0] * p3 + w[1] * F.interpolate(p4_td, size=p3.shape[-2:], mode='nearest'))
 
-        w = self._norm_w(self.w_td3)
-        p3_td = self.conv_td3(
-            w[0] * p3 +
-            w[1] * F.interpolate(p4_td, size=p3.shape[-2:], mode='nearest')
-        )
+        # Bottom-up
+        w = self._w(self.w_bu4)
+        p4_out = self.node_bu4(
+            w[0] * p4 + w[1] * p4_td +
+            w[2] * F.avg_pool2d(p3_td, kernel_size=2, stride=2))
 
-        # Bottom-up path
-        w = self._norm_w(self.w_bu4)
-        p4_out = self.conv_bu4(
-            w[0] * p4 +
-            w[1] * p4_td +
-            w[2] * F.avg_pool2d(p3_td, kernel_size=2, stride=2)
-        )
-
-        w = self._norm_w(self.w_bu5)
-        p5_out = self.conv_bu5(
-            w[0] * p5 +
-            w[1] * F.avg_pool2d(p4_out, kernel_size=2, stride=2)
-        )
+        w = self._w(self.w_bu5)
+        p5_out = self.node_bu5(
+            w[0] * p5 + w[1] * F.avg_pool2d(p4_out, kernel_size=2, stride=2))
 
         return [p3_td, p4_out, p5_out]
