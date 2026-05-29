@@ -19,8 +19,8 @@ class MambaSSM(nn.Module):
     def __init__(self, d_model: int, d_state: int = 16,
                  d_conv: int = 4, expand: int = 2):
         super().__init__()
-        d_inner = d_model * expand
-
+        self.d_inner = d_model * expand
+        d_inner = self.d_inner
         # input split projection: x-branch + z-gate
         self.in_proj  = nn.Linear(d_model, d_inner * 2, bias=False)
 
@@ -48,29 +48,36 @@ class MambaSSM(nn.Module):
 
     # ---- SSM scan  (sequential over L, fast for short seqs) ----
     def _ssm_scan(self, u, delta, A, B, C):
-        """
-        u      : (B, L, d_inner)
-        delta  : (B, L, d_inner)
-        A      : (d_inner, d_state)   fixed
-        B      : (B, L, d_state)
-        C      : (B, L, d_state)
-        Returns y: (B, L, d_inner)
-        """
+    
         B_b, L, D = u.shape
-        N          = A.shape[1]
-        # discretise A, B
+        N = A.shape[1]
+    
         dA = torch.exp(
-            delta.unsqueeze(-1) *                  # (B,L,D,1)
-            A.unsqueeze(0).unsqueeze(0))            # (1,1,D,N)
-        dB = (delta.unsqueeze(-1) *                 # (B,L,D,1)
-              B.unsqueeze(2))                       # (B,L,1,N)  → (B,L,D,N)
-
-        h  = torch.zeros(B_b, D, N,
-                         device=u.device, dtype=u.dtype)
+            delta.unsqueeze(-1) *
+            A.unsqueeze(0).unsqueeze(0)
+        )                           # (B,L,D,N)
+    
+        dB = delta.unsqueeze(-1) * B   # (B,L,D,N)
+    
+        h = torch.zeros(
+            B_b, D, N,
+            device=u.device,
+            dtype=u.dtype
+        )
+    
         ys = []
+    
         for t in range(L):
-            h  = dA[:, t] * h + dB[:, t] * u[:, t].unsqueeze(-1)
-            ys.append((h * C[:, t].unsqueeze(2)).sum(-1))   # (B,D)
+    
+            h = (
+                dA[:, t] * h
+                + dB[:, t] * u[:, t].unsqueeze(-1)
+            )
+    
+            y_t = (h * C[:, t]).sum(-1)
+    
+            ys.append(y_t)
+    
         return torch.stack(ys, dim=1)               # (B,L,D)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -90,6 +97,7 @@ class MambaSSM(nn.Module):
         # 3. selective params
         xBCdt = self.x_proj(xv)                    # (B,L, 2N+d_inner)
         d_state = self.A_log.shape[1]
+        d_inner = self.A_log.shape[0]
         bc = xBCdt[:, :, : 2*d_inner*d_state]
         
         B_p, C_p = bc.chunk(2, dim=-1)
@@ -97,8 +105,11 @@ class MambaSSM(nn.Module):
         B_p = B_p.view(B, L, d_inner, d_state)
         
         C_p = C_p.view(B, L, d_inner, d_state)
-        dt   = F.softplus(
-            self.dt_proj(xBCdt[:, :, 2 * d_state:]))
+        dt_input = xBCdt[:, :, 2*d_inner*d_state:]
+        
+        dt = F.softplus(
+            self.dt_proj(dt_input)
+        )
 
         # 4. SSM
         A    = -torch.exp(self.A_log)               # (d_inner, N)
