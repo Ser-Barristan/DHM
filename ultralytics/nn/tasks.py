@@ -14,6 +14,8 @@ import torch.nn as nn
 from ultralytics.nn.modules.block import (        # noqa: F401
     PatchEmbedDHM,
     PatchMergingDHM,
+ SCDMambaBlock,
+    SCDMambaStage,
     MWSwinStageDHM,
     BiFPNLayerDHM,
     ASPPModuleDHM,
@@ -1974,7 +1976,13 @@ def parse_model(d, ch, verbose=True):
             # YAML args: [window_size, depth, ...]
             # channels unchanged
             c2 = ch[f]
-            args = [ch[f], *args]                   # [dim, window_size, depth, ...]
+            args = [ch[f], *args]
+            
+        elif m is SCDMambaStage:
+
+            c2 = ch[f]
+        
+            args = [ch[f], *args]# [dim, window_size, depth, ...]
         elif m is SCDAspp:
             # YAML args: [out_channels, ...]
             c2 = args[0]
