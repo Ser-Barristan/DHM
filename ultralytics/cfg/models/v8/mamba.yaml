@@ -1,12 +1,35 @@
-nc: 3
-
-
+nc: 7
 
 backbone:
-  - [-1, 1, MambaSPPFASPPBiFPNDetector, [3, 48, [1, 1, 2, 1], 8, 192, 5, [1, 3, 6, 9], 3]]
+
+  - [-1, 1, SCDPatchEmbed, [48, 4]]
+
+  - [-1, 1, SCDMambaStage, [2]]
+
+  - [-1, 1, SCDPatchMerge, []]
+
+  - [-1, 1, SCDMambaStage, [2]]
+
+  - [-1, 1, SCDPatchMerge, []]
+
+  - [-1, 1, SCDMambaStage, [4]]
+
+  - [-1, 1, SCDPatchMerge, []]
+
+  - [-1, 1, SCDMambaStage, [2]]
+
+  - [-1, 1, SPPF, [384, 192, 5]]
+
+  - [-1, 1, SCDAspp, [192]]
+
+  - [[3,5,9], 1, SCDBiFPN, [192]]
+
+  - [-1, 1, SCDBiFPN, [192]]
 
 head:
-  - [0, 1, Index, [0]]
-  - [0, 1, Index, [1]]
-  - [0, 1, Index, [2]]
-  - [[1, 2, 3], 1, Detect, [nc]]
+
+  - [11, 1, Index, [0]]
+  - [11, 1, Index, [1]]
+  - [11, 1, Index, [2]]
+
+  - [[12,13,14], 1, Detect, [nc]]
