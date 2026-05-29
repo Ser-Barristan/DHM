@@ -16,7 +16,17 @@ Examples:
     >>> torch.onnx.export(m, x, f)
     >>> subprocess.run(f"onnxslim {f} {f} && open {f}", shell=True, check=True)  # pip install onnxslim
 """
-
+from .mamba_detector import (
+    MambaSSM,
+    MambaBlock,
+    MambaStem,
+    MambaStage,
+    MambaBackboneNet,
+    AGASPPDet,
+    BiFPNDet,
+    MambaSPPFASPPBiFPNNeck,
+    MambaSPPFASPPBiFPNDetector,
+)
 from ultralytics.nn.modules.block import (
     # ... all existing imports ...
     SCDPatchEmbed,
@@ -130,6 +140,15 @@ from .transformer import (
 
 __all__ = (
     "AIFI",
+    "MambaSSM",
+"MambaBlock",
+"MambaStem",
+"MambaStage",
+"MambaBackboneNet",
+"AGASPPDet",
+"BiFPNDet",
+"MambaSPPFASPPBiFPNNeck",
+"MambaSPPFASPPBiFPNDetector",
     "C1",
     "C2",
     "C2PSA",
