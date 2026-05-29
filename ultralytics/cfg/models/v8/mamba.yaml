@@ -1,0 +1,12 @@
+nc: 3
+
+backbone:
+  - [-1, 1, MambaSPPFASPPBiFPNDetector,
+      [3,64,[2,2,4,2],16,256,5,[1,6,12,18],3]]
+
+head:
+  - [0, 1, Index, [0]]
+  - [0, 1, Index, [1]]
+  - [0, 1, Index, [2]]
+
+  - [[1,2,3], 1, Detect, [nc]]
