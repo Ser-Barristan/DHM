@@ -17,7 +17,14 @@ Examples:
     >>> subprocess.run(f"onnxslim {f} {f} && open {f}", shell=True, check=True)  # pip install onnxslim
 """
 
-
+from ultralytics.nn.modules.block import (
+    # ... all existing imports ...
+    SCDPatchEmbed,
+    SCDPatchMerge,
+    SCDSwinStage,
+    SCDAspp,
+    SCDBiFPN,
+)
 
 from ultralytics.nn.modules.block import (
     PatchEmbedDHM,
