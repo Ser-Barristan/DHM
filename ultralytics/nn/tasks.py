@@ -1932,7 +1932,19 @@ def parse_model(d, ch, verbose=True):
         
         elif m is CBFuse:
             c2 = ch[f[-1]]
-        elif m in frozenset({TorchVision, Index}):
+        elif m is Index:
+        
+            idx = args[0]
+        
+            if isinstance(ch[f], (list, tuple)):
+                c2 = ch[f][idx]
+            else:
+                c2 = ch[f]
+        
+            args = [idx]
+        
+        elif m is TorchVision:
+        
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
@@ -1956,19 +1968,18 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             args = [ch[f], *args]                   # [in_channels, out_channels, ...]
         elif m is SCDBiFPN:
-
+        
             c2 = args[0]
         
             if isinstance(f, int):
-        
-                # second BiFPN receives output of previous BiFPN
                 in_dims = (c2, c2, c2)
-        
             else:
-        
                 in_dims = tuple(ch[x] for x in f)
         
-            args = [in_dims, *args]                # [in_dims, neck_dim]
+            args = [in_dims, *args]
+        
+            # IMPORTANT
+            c2 = [args[1], args[1], args[1]]              # [in_dims, neck_dim]
         else:
             c2 = ch[f]
 
