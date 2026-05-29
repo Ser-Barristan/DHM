@@ -16,6 +16,11 @@ Examples:
     >>> torch.onnx.export(m, x, f)
     >>> subprocess.run(f"onnxslim {f} {f} && open {f}", shell=True, check=True)  # pip install onnxslim
 """
+
+from .block import (
+    SCDMambaBlock,
+    SCDMambaStage,
+)
 from .mamba_detector import (
     MambaSSM,
     MambaBlock,
