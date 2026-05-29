@@ -1956,11 +1956,19 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             args = [ch[f], *args]                   # [in_channels, out_channels, ...]
         elif m is SCDBiFPN:
-            # f is a list [p3_idx, p4_idx, p5_idx]
-            # YAML args: [neck_dim]
-            in_dims = tuple(ch[x] for x in f)
-            c2 = args[0]                            # neck_dim
-            args = [in_dims, *args]                 # [in_dims, neck_dim]
+
+            c2 = args[0]
+        
+            if isinstance(f, int):
+        
+                # second BiFPN receives output of previous BiFPN
+                in_dims = (c2, c2, c2)
+        
+            else:
+        
+                in_dims = tuple(ch[x] for x in f)
+        
+            args = [in_dims, *args]                # [in_dims, neck_dim]
         else:
             c2 = ch[f]
 
