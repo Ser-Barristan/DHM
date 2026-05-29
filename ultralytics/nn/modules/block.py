@@ -2911,29 +2911,106 @@ class _SCDWindowAttn(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x: torch.Tensor,
-                mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+    
         B_, N, C = x.shape
-        nh, hd = self.nh, C // self.nh
-        qkv = (self.qkv(x).reshape(B_, N, 3, nh, hd)
-               .permute(2, 0, 3, 1, 4))
+    
+        nh = self.nh
+        hd = C // nh
+    
+        qkv = (
+            self.qkv(x)
+            .reshape(B_, N, 3, nh, hd)
+            .permute(2, 0, 3, 1, 4)
+        )
+    
         q, k, v = qkv.unbind(0)
+    
+        # --------------------------------------------------
+        # Attention logits
+        # --------------------------------------------------
+    
         attn = (q * self.scale) @ k.transpose(-2, -1)
-
-        bias = (self.rpb[self.rpi.view(-1)]
-                .view(self.ws ** 2, self.ws ** 2, nh)
-                .permute(2, 0, 1).contiguous())
+    
+        # --------------------------------------------------
+        # Relative position bias
+        # --------------------------------------------------
+    
+        bias = (
+            self.rpb[self.rpi.view(-1)]
+            .view(self.ws * self.ws,
+                  self.ws * self.ws,
+                  nh)
+            .permute(2, 0, 1)
+            .contiguous()
+        )
+    
+        # IMPORTANT: match AMP dtype
+        bias = bias.to(attn.dtype)
+    
         attn = attn + bias.unsqueeze(0)
-
+    
+        # --------------------------------------------------
+        # Shifted-window mask
+        # --------------------------------------------------
+    
         if mask is not None:
+    
+            mask = mask.to(attn.dtype)
+    
             nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, nh, N, N)
+    
+            attn = attn.view(
+                B_ // nW,
+                nW,
+                nh,
+                N,
+                N
+            )
+    
             attn = attn + mask.unsqueeze(1).unsqueeze(0)
-            attn = attn.view(-1, nh, N, N)
-
-        attn = self.attn_drop(attn.softmax(dim=-1))
-        out = (attn @ v).transpose(1, 2).reshape(B_, N, C)
-        return self.proj_drop(self.proj(out))
+    
+            attn = attn.view(
+                -1,
+                nh,
+                N,
+                N
+            )
+    
+        # --------------------------------------------------
+        # Softmax
+        # --------------------------------------------------
+    
+        attn = self.attn_drop(
+            attn.softmax(dim=-1)
+        )
+    
+        # IMPORTANT: ensure same dtype
+        v = v.to(attn.dtype)
+    
+        # --------------------------------------------------
+        # Attention output
+        # --------------------------------------------------
+    
+        out = (
+            attn @ v
+        ).transpose(
+            1, 2
+        ).reshape(
+            B_,
+            N,
+            C
+        )
+    
+        out = self.proj(out)
+    
+        out = self.proj_drop(out)
+    
+        return out
 
 
 # ─────────────────────────────────────────────────────────────
