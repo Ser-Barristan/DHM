@@ -2942,21 +2942,37 @@ class _SCDWindowAttn(nn.Module):
 
         qkv = self.qkv(x).reshape(B_, N, 3, nh, head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
-
+        
         attn = (q * self.scale) @ k.transpose(-2, -1)
-        # Add relative position bias
+        
         bias = self.rpb_table[self.rpi.view(-1)].view(
-            self.ws ** 2, self.ws ** 2, nh).permute(2, 0, 1).contiguous()
+            self.ws**2,
+            self.ws**2,
+            nh
+        ).permute(2, 0, 1).contiguous()
+        
+        bias = bias.to(attn.dtype)
+        
         attn = attn + bias.unsqueeze(0)
-
+        
         if mask is not None:
+        
+            mask = mask.to(attn.dtype)
+        
             nW = mask.shape[0]
+        
             attn = attn.view(B_ // nW, nW, nh, N, N)
+        
             attn = attn + mask.unsqueeze(1).unsqueeze(0)
+        
             attn = attn.view(-1, nh, N, N)
-
+        
         attn = self.attn_drop(attn.softmax(dim=-1))
+        
+        v = v.to(attn.dtype)
+        
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+        
         return self.proj_drop(self.proj(x))
 
 
