@@ -30,8 +30,11 @@ class MambaSSM(nn.Module):
             padding=d_conv - 1, groups=d_inner, bias=True)
 
         # selective parameters Δ, B, C from x
-        self.x_proj   = nn.Linear(d_inner,
-                                  d_state * 2 + d_inner, bias=False)
+        self.x_proj = nn.Linear(
+            d_inner,
+            2 * d_inner * d_state + d_inner,
+            bias=False
+        )
         self.dt_proj  = nn.Linear(d_inner, d_inner, bias=True)
 
         # fixed A matrix (log-space), skip-connection D
@@ -87,8 +90,13 @@ class MambaSSM(nn.Module):
         # 3. selective params
         xBCdt = self.x_proj(xv)                    # (B,L, 2N+d_inner)
         d_state = self.A_log.shape[1]
-        B_p  = xBCdt[:, :, :d_state]
-        C_p  = xBCdt[:, :, d_state:2 * d_state]
+        bc = xBCdt[:, :, : 2*d_inner*d_state]
+        
+        B_p, C_p = bc.chunk(2, dim=-1)
+        
+        B_p = B_p.view(B, L, d_inner, d_state)
+        
+        C_p = C_p.view(B, L, d_inner, d_state)
         dt   = F.softplus(
             self.dt_proj(xBCdt[:, :, 2 * d_state:]))
 
