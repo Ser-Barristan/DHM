@@ -14,6 +14,7 @@ from .transformer import TransformerBlock
 
 __all__ = (
     "C1",
+    "SCDPatchEmbed", "SCDPatchMerge", "SCDSwinStage", "SCDAspp", "SCDBiFPN",
     "C2",
     "C2PSA",
     "C3",
