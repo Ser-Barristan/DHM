@@ -14,7 +14,8 @@ from .transformer import TransformerBlock
 
 __all__ = (
     "C1",
-    "SCDPatchEmbed", "SCDPatchMerge", "SCDSwinStage", "SCDAspp", "SCDBiFPN",
+    "SCDPatchEmbed", "SCDPatchMerge", "SCDSwinStage", "SCDAspp", "SCDBiFPN", "SCDMambaBlock",
+"SCDMambaStage",
     "C2",
     "C2PSA",
     "C3",
@@ -3106,7 +3107,70 @@ class _SCDSwinBlock(nn.Module):
         t = self.norm2(x.permute(0, 2, 3, 1))
         t = self.mlp(t).permute(0, 3, 1, 2).contiguous()
         return x + self.dp(t)
+class SCDMambaBlock(nn.Module):
 
+    def __init__(self, dim, expand=2):
+
+        super().__init__()
+
+        hidden = dim * expand
+
+        self.norm1 = nn.BatchNorm2d(dim)
+
+        self.dwconv = nn.Conv2d(
+            dim,
+            dim,
+            kernel_size=7,
+            padding=3,
+            groups=dim,
+            bias=False
+        )
+
+        self.pw1 = nn.Conv2d(dim, hidden, 1, bias=False)
+
+        self.act = nn.GELU()
+
+        self.pw2 = nn.Conv2d(hidden, dim, 1, bias=False)
+
+        self.norm2 = nn.BatchNorm2d(dim)
+
+        self.channel_mix = nn.Sequential(
+            nn.Conv2d(dim, hidden, 1, bias=False),
+            nn.GELU(),
+            nn.Conv2d(hidden, dim, 1, bias=False)
+        )
+
+    def forward(self, x):
+
+        y = self.norm1(x)
+
+        y = self.dwconv(y)
+
+        y = self.pw2(self.act(self.pw1(y)))
+
+        x = x + y
+
+        y = self.channel_mix(self.norm2(x))
+
+        return x + y
+
+
+class SCDMambaStage(nn.Module):
+
+    def __init__(self,
+                 dim,
+                 depth=2):
+
+        super().__init__()
+
+        self.blocks = nn.Sequential(
+            *[SCDMambaBlock(dim)
+              for _ in range(depth)]
+        )
+
+    def forward(self, x):
+
+        return self.blocks(x)
 
 # ─────────────────────────────────────────────────────────────
 # SCDSwinStage  (YAML-registered module)
