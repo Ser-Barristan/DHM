@@ -1,0 +1,63 @@
+# SCD-Swin-BiFPN: Multi-Window Swin-Transformer + ASPP + BiFPN backbone/neck
+# for sickle cell detection in raw holograms — YOLOv8 Detect head
+# Input: 512×512 (grayscale hologram; set channels=1 in dataset YAML)
+# Params: ~9-11 M  (well under 20 M budget)
+# Strides: 8, 16, 32  →  P3=64×64, P4=32×32, P5=16×16
+
+nc: 80          # overridden at training time by your dataset nc
+imgsz: 512
+
+backbone:
+  # [from,  repeats, module,       args]
+  # ── Patch Embedding ─────────────────────────────────────────
+  # in_chans=1, embed_dim=48, patch_size=4
+  # out: (B, 48, 128, 128)   stride=4
+  - [-1, 1, SCDPatchEmbed,   [48, 4]]         # 0   out_ch=48
+
+  # ── Stage 0: 128×128 spatial, dim=48, ws=8, depth=2 ─────────
+  - [-1, 1, SCDSwinStage,    [8, 2]]           # 1   out_ch=48
+
+  # ── Patch Merge 0: 128×128 → 64×64, ch 48→96 ───────────────
+  - [-1, 1, SCDPatchMerge,   []]               # 2   out_ch=96
+
+  # ── Stage 1: 64×64 spatial, dim=96, ws=8, depth=2 ───────────
+  - [-1, 1, SCDSwinStage,    [8, 2]]           # 3   out_ch=96   P3-level
+
+  # ── Patch Merge 1: 64×64 → 32×32, ch 96→192 ────────────────
+  - [-1, 1, SCDPatchMerge,   []]               # 4   out_ch=192
+
+  # ── Stage 2: 32×32 spatial, dim=192, ws=8, depth=4 ──────────
+  - [-1, 1, SCDSwinStage,    [8, 4]]           # 5   out_ch=192  P4-level
+
+  # ── Patch Merge 2: 32×32 → 16×16, ch 192→384 ───────────────
+  - [-1, 1, SCDPatchMerge,   []]               # 6   out_ch=384
+
+  # ── Stage 3: 16×16 spatial, dim=384, ws=8, depth=2 ──────────
+  - [-1, 1, SCDSwinStage,    [8, 2]]           # 7   out_ch=384
+
+  # ── SPPF: enrich P5 receptive field, compress 384→192 ───────
+  - [-1, 1, SPPF,            [192, 5]]         # 8   out_ch=192  P5-level
+
+head:
+  # ── ASPP on P5 (adds global context before BiFPN) ───────────
+  - [-1, 1, SCDAspp,         [192]]            # 9   out_ch=192
+
+  # ── BiFPN Layer 1 ────────────────────────────────────────────
+  # from: [P3=layer3, P4=layer5, P5=layer9]
+  # neck_dim=192
+  - [[3, 5, 9], 1, SCDBiFPN, [192]]            # 10  out_ch=192  list[P3,P4,P5]
+
+  # ── BiFPN Layer 2 (second pass for richer fusion) ────────────
+  - [-1, 1, SCDBiFPN,        [192]]            # 11  out_ch=192  list[P3,P4,P5]
+
+  # ── Unpack P3 for Detect ─────────────────────────────────────
+  - [-1, 1, Index,           [0]]              # 12  P3 (B,192,64,64)
+
+  # ── Unpack P4 for Detect ─────────────────────────────────────
+  - [-2, 1, Index,           [1]]              # 13  P4 (B,192,32,32)
+
+  # ── Unpack P5 for Detect ─────────────────────────────────────
+  - [-3, 1, Index,           [2]]              # 14  P5 (B,192,16,16)
+
+  # ── YOLO Detect head (UNTOUCHED) ─────────────────────────────
+  - [[12, 13, 14], 1, Detect, [nc]]            # 15  Detect(P3,P4,P5)
