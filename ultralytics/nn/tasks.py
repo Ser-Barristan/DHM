@@ -25,9 +25,23 @@ from ultralytics.nn.modules.block import (        # noqa: F401
 from ultralytics.nn.modules.head import (         # noqa: F401
     PhaseRegressionHead,
 )
+
+from ultralytics.nn.modules.block import (
+    # ... all existing imports ...
+    SCDPatchEmbed,
+    SCDPatchMerge,
+    SCDSwinStage,
+    SCDAspp,
+    SCDBiFPN,
+)
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
+    SCDPatchEmbed,
+    SCDPatchMerge,
+    SCDSwinStage,
+    SCDAspp,
+    SCDBiFPN,
     C1,
     C2,
     C2PSA,
@@ -1913,12 +1927,40 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [c1, c2, *args[1:]]
+
+        
+        
         elif m is CBFuse:
             c2 = ch[f[-1]]
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
+
+        elif m is SCDPatchEmbed:
+            # YAML args: [embed_dim, patch_size]
+            # parse_model injects c1 as first positional arg
+            c2 = args[0]                            # embed_dim
+            args = [ch[f], *args]                   # [in_chans, embed_dim, patch_size]
+        elif m is SCDPatchMerge:
+            # No YAML args needed; dim == c1
+            c2 = ch[f] * 2                          # channels double
+            args = [ch[f]]                          # [dim]
+        elif m is SCDSwinStage:
+            # YAML args: [window_size, depth, ...]
+            # channels unchanged
+            c2 = ch[f]
+            args = [ch[f], *args]                   # [dim, window_size, depth, ...]
+        elif m is SCDAspp:
+            # YAML args: [out_channels, ...]
+            c2 = args[0]
+            args = [ch[f], *args]                   # [in_channels, out_channels, ...]
+        elif m is SCDBiFPN:
+            # f is a list [p3_idx, p4_idx, p5_idx]
+            # YAML args: [neck_dim]
+            in_dims = tuple(ch[x] for x in f)
+            c2 = args[0]                            # neck_dim
+            args = [in_dims, *args]                 # [in_dims, neck_dim]
         else:
             c2 = ch[f]
 
