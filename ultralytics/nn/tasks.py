@@ -36,10 +36,10 @@ from ultralytics.nn.modules.block import (
     SCDAspp,
     SCDBiFPN,
 )
+from ultralytics.nn.modules.conv import CBAM
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
-    CBAM,
     MambaSSM,
     MambaBlock,
     MambaStem,
@@ -1972,7 +1972,10 @@ def parse_model(d, ch, verbose=True):
         elif m is SCDPatchMerge:
             # No YAML args needed; dim == c1
             c2 = ch[f] * 2                          # channels double
-            args = [ch[f]]                          # [dim]
+            args = [ch[f]]                          # [dim
+        elif m is CBAM or getattr(m, '__name__', '') == 'CBAM':
+            c2 = ch[f]
+            args = [ch[f], *args]
  
         elif m is SCDSwinStage:
             # YAML args: [window_size, depth, ...]
