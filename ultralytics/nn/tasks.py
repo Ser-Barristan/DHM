@@ -1974,7 +1974,8 @@ def parse_model(d, ch, verbose=True):
             c2 = ch[f] * 2                          # channels double
             args = [ch[f]]                          # [dim]
         elif m is CBAM:
-            c2 = c1
+            c2 = ch[f]          # channels stay the same (CBAM doesn't change them)
+            args = [ch[f]]      # pass c1 to CBAM.__init__(self, c1, kernel_size=7)
         elif m is SCDSwinStage:
             # YAML args: [window_size, depth, ...]
             # channels unchanged
