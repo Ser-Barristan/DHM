@@ -1894,8 +1894,8 @@ def parse_model(d, ch, verbose=True):
             if m is C2fCIB:
                 legacy = False
         elif m is MambaSPPFASPPBiFPNDetector:
-            c2 = [args[4], args[4], args[4]]   # neck_ch repeated for P3/P4/P5
-        
+            c2 = [args[4], args[4], args[4]]  # neck_ch repeated for P3/P4/P5
+
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
@@ -1942,69 +1942,65 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [c1, c2, *args[1:]]
-
-        
-        
         elif m is CBFuse:
             c2 = ch[f[-1]]
         elif m is Index:
-        
             idx = args[0]
-        
             if isinstance(ch[f], (list, tuple)):
                 c2 = ch[f][idx]
             else:
                 c2 = ch[f]
-        
             args = [idx]
-        
         elif m is TorchVision:
-        
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
-
         elif m is SCDPatchEmbed:
             # YAML args: [embed_dim, patch_size]
             # parse_model injects c1 as first positional arg
-            c2 = args[0]                            # embed_dim
-            args = [ch[f], *args]                   # [in_chans, embed_dim, patch_size]
+            c2 = args[0]                        # embed_dim (no width scaling: it's a fixed token dim)
+            args = [ch[f], *args]               # [in_chans, embed_dim, patch_size]
         elif m is SCDPatchMerge:
-            # No YAML args needed; dim == c1
-            c2 = ch[f] * 2                          # channels double
-            args = [ch[f]]                          # [dim
-        elif m is CBAM or getattr(m, '__name__', '') == 'CBAM':
-            c2 = ch[f]
-            args = [ch[f], *args]
- 
-        elif m is SCDSwinStage:
-            # YAML args: [window_size, depth, ...]
-            # channels unchanged
-            c2 = ch[f]
-            args = [ch[f], *args]
-            
-        elif m is SCDMambaStage:
+            # No YAML args needed; dim == c1; output doubles channels
+            c2 = ch[f] * 2
+            args = [ch[f]]                      # [dim]
 
+        # ── FIX 1: CBAM ──────────────────────────────────────────────────────
+        # Use name-based fallback to avoid Python `is` identity mismatch when
+        # CBAM is imported via two different module paths in the same process.
+        elif m is CBAM or getattr(m, "__name__", "") == "CBAM":
             c2 = ch[f]
-        
-            args = [ch[f], *args]# [dim, window_size, depth, ...]
+            args = [ch[f], *args]               # prepend c1; kernel_size stays optional
+
+        elif m is SCDSwinStage:
+            # YAML args: [window_size, depth, ...]  — channels pass through unchanged
+            c2 = ch[f]
+            args = [ch[f], *args]               # [dim, window_size, depth, ...]
+        elif m is SCDMambaStage:
+            # channels pass through unchanged
+            c2 = ch[f]
+            args = [ch[f], *args]               # [dim, depth]
+
+        # ── FIX 2: SCDAspp — apply width scaling ─────────────────────────────
+        # Without scaling c2 stays at the raw YAML value (e.g. 1024), while the
+        # very next C2PSA gets its c2 scaled down (e.g. to 256 at scale=n),
+        # causing the c1 == c2 assertion inside C2PSA to fire.
         elif m is SCDAspp:
             # YAML args: [out_channels, ...]
-            c2 = args[0]
-            args = [ch[f], *args]                   # [in_channels, out_channels, ...]
+            c2 = make_divisible(min(args[0], max_channels) * width, 8)
+            args = [ch[f], c2, *args[1:]]       # [in_channels, out_channels_scaled, ...]
+
+        # ── FIX 3: SCDBiFPN — apply width scaling to neck_dim ────────────────
         elif m is SCDBiFPN:
-        
-            c2 = args[0]
-        
+            # YAML args: [neck_dim, ...]
+            neck_dim = make_divisible(min(args[0], max_channels) * width, 8)
             if isinstance(f, int):
-                in_dims = (c2, c2, c2)
+                in_dims = (ch[f], ch[f], ch[f])
             else:
                 in_dims = tuple(ch[x] for x in f)
-        
-            args = [in_dims, *args]
-        
-            # IMPORTANT
-            c2 = [args[1], args[1], args[1]]              # [in_dims, neck_dim]
+            args = [in_dims, neck_dim, *args[1:]]   # [in_dims, neck_dim_scaled, ...]
+            c2 = [neck_dim, neck_dim, neck_dim]      # list output: one per FPN level
+
         else:
             c2 = ch[f]
 
