@@ -1973,7 +1973,7 @@ def parse_model(d, ch, verbose=True):
             # No YAML args needed; dim == c1
             c2 = ch[f] * 2                          # channels double
             args = [ch[f]]                          # [dim]
-        elif m.__name__ == "CBAM":
+        elif m is CBAM:
             c2 = ch[f]
             args = [ch[f], *args]
         elif m is SCDSwinStage:
