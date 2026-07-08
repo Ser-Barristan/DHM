@@ -1973,9 +1973,7 @@ def parse_model(d, ch, verbose=True):
             # No YAML args needed; dim == c1
             c2 = ch[f] * 2                          # channels double
             args = [ch[f]]                          # [dim]
-        elif m is CBAM or getattr(m, '__name__', '') == 'CBAM':
-            c2 = ch[f]
-            args = [ch[f], *args]
+ 
         elif m is SCDSwinStage:
             # YAML args: [window_size, depth, ...]
             # channels unchanged
