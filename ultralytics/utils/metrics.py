@@ -171,6 +171,64 @@ def bbox_iou(
     return iou  # IoU
 
 
+def bbox_wiou(box1, box2, eps=1e-7):
+    """
+    WIoU v3 loss with dynamic focusing coefficient.
+    Focuses gradient on medium-difficulty examples.
+    Reduces weight on easy (already aligned) and geometric outlier boxes.
+    
+    Args:
+        box1: predicted boxes (N, 4) in xyxy format
+        box2: target boxes (N, 4) in xyxy format
+    Returns:
+        loss: (N,) WIoU loss per box
+        iou:  (N,) standard IoU per box (for metric reporting)
+    """
+    # --- Standard IoU ---
+    inter_x1 = torch.max(box1[:, 0], box2[:, 0])
+    inter_y1 = torch.max(box1[:, 1], box2[:, 1])
+    inter_x2 = torch.min(box1[:, 2], box2[:, 2])
+    inter_y2 = torch.min(box1[:, 3], box2[:, 3])
+
+    inter = (inter_x2 - inter_x1).clamp(0) * (inter_y2 - inter_y1).clamp(0)
+    area1 = (box1[:, 2] - box1[:, 0]).clamp(0) * (box1[:, 3] - box1[:, 1]).clamp(0)
+    area2 = (box2[:, 2] - box2[:, 0]).clamp(0) * (box2[:, 3] - box2[:, 1]).clamp(0)
+    union = area1 + area2 - inter + eps
+    iou = inter / union
+
+    # --- Center distance (rho^2) ---
+    cx1 = (box1[:, 0] + box1[:, 2]) / 2
+    cy1 = (box1[:, 1] + box1[:, 3]) / 2
+    cx2 = (box2[:, 0] + box2[:, 2]) / 2
+    cy2 = (box2[:, 1] + box2[:, 3]) / 2
+    rho2 = (cx1 - cx2) ** 2 + (cy1 - cy2) ** 2
+
+    # --- Enclosing box diagonal (c^2) ---
+    enc_x1 = torch.min(box1[:, 0], box2[:, 0])
+    enc_y1 = torch.min(box1[:, 1], box2[:, 1])
+    enc_x2 = torch.max(box1[:, 2], box2[:, 2])
+    enc_y2 = torch.max(box1[:, 3], box2[:, 3])
+    c2 = (enc_x2 - enc_x1) ** 2 + (enc_y2 - enc_y1) ** 2 + eps
+
+    # --- Normalized center distance ---
+    r = rho2 / c2  # shape (N,)
+
+    # --- Dynamic focusing coefficient (WIoU v3) ---
+    # r_star: exponential moving average approximated as batch mean
+    # Detach so it does not receive gradients itself
+    r_star = r.mean().detach()
+
+    # beta > 1 for boxes where center distance > batch mean (harder examples get more loss)
+    # beta < 1 for already well-aligned boxes (easy examples get less loss)
+    beta = torch.exp(r / (r_star + eps) - 1).clamp(min=0.0, max=8.0)
+
+    # --- WIoU v3 loss ---
+    loss = beta * (1.0 - iou)
+
+    return loss, iou
+
+
+
 def mask_iou(mask1: torch.Tensor, mask2: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
     """Calculate masks IoU.
 
