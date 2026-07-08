@@ -39,6 +39,7 @@ from ultralytics.nn.modules.block import (
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
+    CBAM,
 MambaSSM,
 MambaBlock,
 MambaStem,
@@ -1972,6 +1973,8 @@ def parse_model(d, ch, verbose=True):
             # No YAML args needed; dim == c1
             c2 = ch[f] * 2                          # channels double
             args = [ch[f]]                          # [dim]
+        elif m is CBAM:
+            c2 = c1
         elif m is SCDSwinStage:
             # YAML args: [window_size, depth, ...]
             # channels unchanged
