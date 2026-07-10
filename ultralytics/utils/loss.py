@@ -16,7 +16,6 @@ from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigne
 from ultralytics.utils.torch_utils import autocast
 
 from .metrics import bbox_iou, probiou
-from .metrics import bbox_wiou
 from .tal import bbox2dist, rbox2dist
 
 
